@@ -1,0 +1,19 @@
+{
+  "name": "Naturvärdesbiotop",
+  "version": 1,
+  "options": {
+    "decimal_comma": true,
+    "page_break": true,
+    "photo": {"enabled": true, "height_cm": 6.0},
+    "map": {"enabled": true, "height_cm": 6.0}
+  },
+  "aliases": {
+    "Shape__Area": ["Shape_Area", "ShapeArea"],
+    "objektnummer": ["objectnumber", "objektnr"]
+  },
+  "mapping": [
+    {"enabled": true, "label": "Naturvärdesbiotop", "source": "objektnummer", "transform": "identity", "const": ""},
+    {"enabled": true, "label": "Areal (ha)", "source": "Shape__Area", "transform": "m2_to_ha_round2", "const": ""},
+    {"enabled": true, "label": "Biotoptyp", "source": "", "transform": "constant", "const": ""}
+  ]
+}
