@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Excel → mikro-tabele w Wordzie (GUI, Tkinter) z mapowaniem, kolejnością i transformacjami.
-Nowe:
-- transformacja 'date_only' (obcięcie czasu),
-- opcja "Dodaj ramkę na mapę (po zdjęciu)",
-- help ma zawijanie tekstu,
-- page break po zdjęciu i ewentualnie mapie.
+Excel → mikro-tabele w Wordzie (GUI, Tkinter) z mapowaniem, kolejnością, transformacjami i presetami JSON.
+Wersja bez fallbacku default_mapping:
+- Start: pusta mapa (po wczytaniu Excela), użytkownik ładuje preset z GUI.
+- „Pozostałe kolumny” pokazują wszystkie kolumny (odznaczone).
 """
 
 # ---------- BOOTSTRAP PIP ----------
@@ -39,10 +37,11 @@ def _ensure(pkg, module=None):
 _ensure("pandas","pandas"); _ensure("python-docx","docx"); _ensure("openpyxl","openpyxl"); _ensure_min("xlrd","xlrd","2.0.1")
 
 # ---------- IMPORTY ----------
-import os
+import os, json
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import pandas as pd
+from pathlib import Path
 from docx import Document
 from docx.shared import Cm, Pt
 from docx.enum.table import WD_TABLE_ALIGNMENT
@@ -77,17 +76,13 @@ def tf_constant(val, row, comma=False, const_val=""):
     return const_val
 
 def tf_date_only(val, row, comma=False):
-    """Zwraca tylko część daty (YYYY-MM-DD). Obsługuje string/datetime."""
     if _is_missing(val): return ""
     try:
-        # jeśli datetime/Date/Timestamp
         if isinstance(val, (datetime, date, pd.Timestamp)):
             return pd.to_datetime(val).date().isoformat()
         s = str(val).strip()
-        # typowe formaty: "YYYY-MM-DD HH:MM:SS" lub ISO "YYYY-MM-DDTHH:MM:SS"
         if " " in s: s = s.split(" ")[0]
         if "T" in s: s = s.split("T")[0]
-        # spróbuj sparsować
         d = pd.to_datetime(s, errors="coerce")
         return d.date().isoformat() if not pd.isna(d) else s
     except Exception:
@@ -115,35 +110,28 @@ def _set_cell_text(cell, text, bold=False, size_pt=10):
             r.font.bold = bold; r.font.size = Pt(size_pt)
     if cell.paragraphs: cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
 
-# ---------- CZYTANIE EXCEL ----------
+# ---------- EXCEL ----------
 def read_excel_any(path):
     ext = os.path.splitext(path.lower())[1]
     if ext == ".xls": return pd.read_excel(path, engine="xlrd")
     return pd.read_excel(path)
 
-# ---------- DOMYŚLNA MAPA ----------
-def default_mapping(df_cols):
-    has = set(map(str, df_cols))
-    def col(name): return name if name in has else ""
-    return [
-        {"enabled": True, "label": "Naturvärdesbiotop",              "source": col("objektnummer"),            "transform": "identity",            "const": ""},
-        {"enabled": True, "label": "Naturvärdesklass",               "source": col("naturvardesklass"),        "transform": "identity",            "const": ""},
-        {"enabled": True, "label": "Areal (ha)",                     "source": col("Shape__Area"),             "transform": "m2_to_ha_round2",     "const": ""},
-        {"enabled": True, "label": "Naturtyp",                       "source": col("naturtyp"),                "transform": "identity",            "const": ""},
-        {"enabled": True, "label": "Biotoptyp",                      "source": "",                             "transform": "constant",            "const": ""},
-        {"enabled": True, "label": "Hydrologisk huvudgrupp",         "source": col("hydromorfologiskTyp"),     "transform": "identity",            "const": ""},
-        {"enabled": True, "label": "Natura 2000-naturtyp",           "source": "",                             "transform": "constant",            "const": ""},
-        {"enabled": True, "label": "Beskrivning",                    "source": col("objektbeskrivning"),       "transform": "identity",            "const": ""},
-        {"enabled": True, "label": "Biotopvärde",                    "source": col("biotopvarden"),            "transform": "identity",            "const": ""},
-        {"enabled": True, "label": "Tidigare kända värdearter",      "source": col("vardearterKandaTidigare"), "transform": "identity",            "const": ""},
-        {"enabled": True, "label": "Inventerade värdearter",         "source": col("vardearterObserverade"),   "transform": "identity",            "const": ""},
-        {"enabled": True, "label": "Invasiva främmande arter",       "source": col("invasivaFrammandeArter"),  "transform": "identity",            "const": ""},
-        {"enabled": True, "label": "Artvärde",                       "source": col("artvarden"),               "transform": "identity",            "const": ""},
-        {"enabled": True, "label": "Motivering till naturvärdesklass","source":"",                             "transform": "constant",            "const": ""},
-        {"enabled": True, "label": "Datum för fältbesök",            "source": col("datumForObjektavgr"),      "transform": "date_only",           "const": ""},
-        {"enabled": True, "label": "Inventerare",                    "source": col("utforare"),                "transform": "identity",            "const": ""},
-        {"enabled": True, "label": "Bedömning",                      "source": col("preliminarAvgransning"),   "transform": "prelim_to_bedomning", "const": ""},
-    ]
+# ---------- PRESETY: dopasowanie aliasów ----------
+def _norm(s: str) -> str:
+    return "".join(ch for ch in str(s).lower() if ch.isalnum())
+
+def resolve_source_name(wanted: str, df_columns, aliases: dict) -> str:
+    cols = list(map(str, df_columns))
+    by_norm = {_norm(c): c for c in cols}
+    candidates = [wanted] + list(aliases.get(wanted, [])) if wanted else []
+    for cand in candidates:
+        n = _norm(cand)
+        if n in by_norm:
+            return by_norm[n]
+        for c in cols:
+            if n and n in _norm(c):
+                return c
+    return ""  # brak trafienia
 
 # ---------- GENERACJA DOCX ----------
 def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
@@ -156,6 +144,7 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
     content_w_cm = (section.page_width - section.left_margin - section.right_margin) / EMU_PER_CM
     left_w_cm, right_w_cm = 6.0, max(6.0, content_w_cm - 6.0)
 
+    # extra kolumny dorzucamy jako identity na końcu
     for col_name in extra_cols:
         mapping_rows.append({"enabled": True, "label": col_name, "source": col_name, "transform": "identity", "const": ""})
 
@@ -194,7 +183,6 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
             mp.rows[0].height = Cm(map_h_cm); mp.cell(0, 0).width = Cm(content_w_cm)
             _set_cell_text(mp.cell(0, 0), " ")
             doc.add_paragraph("")
-
         if page_break:
             doc.add_page_break()
 
@@ -205,9 +193,12 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Excel → Mikro-tabele Word (mapowanie)")
-        self.geometry("1000x780"); self.resizable(True, True)
-        self.df = None; self.mapping = []; self.extra_vars = {}
+        self.title("Excel → Mikro-tabele Word (presety)")
+        self.geometry("1000x800"); self.resizable(True, True)
+        self.df = None                  # DataFrame po wczytaniu Excela
+        self.mapping = []               # lista dictów (pusta do czasu wczytania presetu)
+        self.extra_vars = {}            # nazwa kolumny -> tk.BooleanVar()
+        self.preset_label_var = tk.StringVar(value="(brak)")
         self._build_ui()
 
     def _build_ui(self):
@@ -222,8 +213,11 @@ class App(tk.Tk):
         ttk.Label(top, text="Nazwa pliku .docx:").grid(row=2, column=0, sticky="w", **pad)
         self.name_entry = ttk.Entry(top, width=40); self.name_entry.insert(0, "wynik.docx"); self.name_entry.grid(row=2, column=1, sticky="w", **pad)
 
-        ttk.Button(top, text="Wczytaj i załaduj mapę", command=self.load_columns)\
-            .grid(row=3, column=0, columnspan=3, sticky="we", padx=8, pady=(2,8))
+        btn_row = ttk.Frame(top); btn_row.grid(row=3, column=0, columnspan=3, sticky="we", padx=8, pady=(2,8))
+        ttk.Button(btn_row, text="Wczytaj kolumny (Excel)", command=self.load_columns).pack(side="left")
+        ttk.Button(btn_row, text="Wczytaj preset…", command=self.load_preset_dialog).pack(side="left", padx=8)
+        ttk.Label(btn_row, text="Preset:").pack(side="left", padx=(16,4))
+        ttk.Label(btn_row, textvariable=self.preset_label_var, foreground="#555").pack(side="left")
 
         nb = ttk.Notebook(top); nb.grid(row=4, column=0, columnspan=3, sticky="nsew", padx=8, pady=8)
         top.rowconfigure(4, weight=1); top.columnconfigure(1, weight=1)
@@ -321,7 +315,56 @@ class App(tk.Tk):
         ttk.Checkbutton(opt, text="Użyj przecinka dziesiętnego", variable=self.var_comma)\
             .grid(row=2, column=1, sticky="w", padx=8, pady=4)
 
-    # Handlery i reszta – bez zmian poza przekazaniem nowych opcji
+    # ---- Pomocnicze ----
+    def rebuild_extra_columns(self):
+        """Zbuduj listę checkboxów 'Pozostałe kolumny' na podstawie self.df i self.mapping."""
+        for w in getattr(self, "extra_box", ttk.Frame()).winfo_children(): w.destroy()
+        mapped_sources = {m["source"] for m in self.mapping if m.get("source")}
+        self.extra_vars = {}
+        if self.df is None: return
+        for c in self.df.columns:
+            if c in mapped_sources:  # nie powielaj tego co już jest w mapie
+                continue
+            v = tk.BooleanVar(value=False)
+            ttk.Checkbutton(self.extra_box, text=c, variable=v).pack(anchor="w", padx=8, pady=2)
+            self.extra_vars[c] = v
+
+    # ---- Presety (GUI) ----
+    def load_preset_dialog(self):
+        if self.df is None:
+            messagebox.showwarning("Najpierw Excel", "Wczytaj plik Excel (żeby dopasować kolumny).")
+            return
+        p = filedialog.askopenfilename(initialdir="presets",
+                                        filetypes=[("Preset JSON","*.json"),("All","*.*")])
+        if not p: return
+        try:
+            data = json.loads(Path(p).read_text(encoding="utf-8"))
+        except Exception as e:
+            messagebox.showerror("Błąd", f"Nie można wczytać presetu:\n{e}"); return
+        aliases = data.get("aliases", {})
+        new_mapping = []
+        for item in data.get("mapping", []):
+            m = dict(item)
+            m["source"] = resolve_source_name(m.get("source",""), self.df.columns, aliases)
+            new_mapping.append(m)
+        self.mapping = new_mapping
+        # opcje z presetu
+        opts = data.get("options", {})
+        self.var_comma.set(bool(opts.get("decimal_comma", self.var_comma.get())))
+        self.var_break.set(bool(opts.get("page_break", self.var_break.get())))
+        ph = opts.get("photo", {})
+        if "enabled" in ph: self.var_photo.set(bool(ph["enabled"]))
+        if "height_cm" in ph: self.var_photo_h.set(float(ph["height_cm"]))
+        mp = opts.get("map", {})
+        if "enabled" in mp: self.var_map.set(bool(mp["enabled"]))
+        if "height_cm" in mp: self.var_map_h.set(float(mp["height_cm"]))
+        # UI
+        self.preset_label_var.set(data.get("name","(preset)"))
+        self.refresh_tree()
+        self.rebuild_extra_columns()
+        self.cmb_source.configure(values=[""] + list(self.df.columns))
+
+    # ---- Handlery standardowe ----
     def pick_excel(self):
         p = filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx *.xls"), ("All","*.*")])
         if p: self.in_entry.delete(0, tk.END); self.in_entry.insert(0, p)
@@ -338,17 +381,13 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror("Błąd wczytywania", f"Nie udało się wczytać Excela:\n{e}\n\nJeśli to .xls, wymagany xlrd>=2.0.1.")
             return
-        self.mapping = default_mapping(self.df.columns); self.refresh_tree()
-        for w in getattr(self, "extra_box", ttk.Frame()).winfo_children(): w.destroy()
-        mapped_sources = {m["source"] for m in self.mapping if m.get("source")}
-        self.extra_vars = {}
-        for c in self.df.columns:
-            if c in mapped_sources: continue
-            v = tk.BooleanVar(value=False)
-            ttk.Checkbutton(self.extra_box, text=c, variable=v).pack(anchor="w", padx=8, pady=2)
-            self.extra_vars[c] = v
+        # start bez mapy (czysta lista) – preset wczytujesz ręcznie
+        self.mapping = []
+        self.preset_label_var.set("(brak)")
+        self.refresh_tree()
+        # pokaż wszystkie kolumny jako „pozostałe”
+        self.rebuild_extra_columns()
         self.cmb_source.configure(values=[""] + list(self.df.columns))
-        #messagebox.showinfo("OK", "Załadowano kolumny i domyślną mapę.")
 
     def refresh_tree(self):
         self.tree.delete(*self.tree.get_children())
@@ -378,6 +417,8 @@ class App(tk.Tk):
             "const": self.var_const.get(),
         }
         self.refresh_tree(); self.tree.selection_set(str(i))
+        # po zmianie źródła zaktualizuj listę „pozostałych kolumn”
+        self.rebuild_extra_columns()
 
     def move_selected(self, delta):
         sel = self.tree.selection()
@@ -391,6 +432,7 @@ class App(tk.Tk):
         sel = self.tree.selection()
         if not sel: return
         i = int(sel[0]); del self.mapping[i]; self.refresh_tree()
+        self.rebuild_extra_columns()
 
     def add_from_column(self):
         src = self.var_source.get().strip()
@@ -398,6 +440,7 @@ class App(tk.Tk):
             messagebox.showinfo("Info","Wybierz źródło w polu 'Źródło', potem kliknij 'Dodaj z kolumny…'."); return
         self.mapping.append({"enabled": False, "label": src, "source": src, "transform":"identity", "const":""})
         self.refresh_tree(); self.tree.selection_set(str(len(self.mapping)-1))
+        self.rebuild_extra_columns()
 
     def add_blank_row(self):
         self.mapping.append({"enabled": True, "label": "", "source": "", "transform":"constant", "const":""})
@@ -411,6 +454,10 @@ class App(tk.Tk):
             messagebox.showwarning("Folder","Podany folder wyjściowy nie istnieje."); return
         out_name = self.name_entry.get().strip() or "wynik.docx"
         extra = [k for k,v in self.extra_vars.items() if v.get()]
+        if not self.mapping and not extra:
+            messagebox.showwarning("Brak pól", "Mapa jest pusta i nie wybrano żadnych dodatkowych kolumn.\n"
+                                               "Wczytaj preset lub zaznacz kolumny w zakładce „Pozostałe kolumny”.")
+            return
         try:
             out_file = build_docx(
                 self.df, list(self.mapping), extra, out_dir, out_name,
