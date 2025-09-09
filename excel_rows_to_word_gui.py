@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Excel → mikro-tabele w Wordzie (GUI, Tkinter) z mapowaniem, kolejnością, transformacjami i presetami JSON.
-Wersja bez fallbacku default_mapping:
-- Start: pusta mapa (po wczytaniu Excela), użytkownik ładuje preset z GUI.
-- „Pozostałe kolumny” pokazują wszystkie kolumny (odznaczone).
+Excel → mikro-tabele w Wordzie (GUI, Tkinter) z mapowaniem, transformacjami i presetami JSON.
+UX:
+- Po wybraniu pliku Excel kolumny wczytują się automatycznie (brak osobnego przycisku).
+- „Pozostałe kolumny” pozostają puste do momentu wczytania presetu (zamiast listować wszystko).
 """
 
 # ---------- BOOTSTRAP PIP ----------
@@ -214,8 +214,7 @@ class App(tk.Tk):
         self.name_entry = ttk.Entry(top, width=40); self.name_entry.insert(0, "wynik.docx"); self.name_entry.grid(row=2, column=1, sticky="w", **pad)
 
         btn_row = ttk.Frame(top); btn_row.grid(row=3, column=0, columnspan=3, sticky="we", padx=8, pady=(2,8))
-        ttk.Button(btn_row, text="Wczytaj kolumny (Excel)", command=self.load_columns).pack(side="left")
-        ttk.Button(btn_row, text="Wczytaj preset…", command=self.load_preset_dialog).pack(side="left", padx=8)
+        ttk.Button(btn_row, text="Wczytaj preset…", command=self.load_preset_dialog).pack(side="left")
         ttk.Label(btn_row, text="Preset:").pack(side="left", padx=(16,4))
         ttk.Label(btn_row, textvariable=self.preset_label_var, foreground="#555").pack(side="left")
 
@@ -228,7 +227,7 @@ class App(tk.Tk):
 
         # --- Pozostałe kolumny
         self.tab_extra = ttk.Frame(nb); nb.add(self.tab_extra, text="Pozostałe kolumny")
-        self.extra_box = ttk.LabelFrame(self.tab_extra, text="Kolumny (domyślnie wyłączone)")
+        self.extra_box = ttk.LabelFrame(self.tab_extra, text="Kolumny (nieużyte w mapie)")
         self.extra_box.pack(fill="both", expand=True, padx=8, pady=8)
 
         # --- Opcje
@@ -316,18 +315,33 @@ class App(tk.Tk):
             .grid(row=2, column=1, sticky="w", padx=8, pady=4)
 
     # ---- Pomocnicze ----
+    def _placeholder_in_extra(self, text):
+        for w in self.extra_box.winfo_children(): w.destroy()
+        ttk.Label(self.extra_box, text=text, foreground="#777", wraplength=900, justify="left")\
+            .pack(fill="x", padx=12, pady=12)
+
     def rebuild_extra_columns(self):
-        """Zbuduj listę checkboxów 'Pozostałe kolumny' na podstawie self.df i self.mapping."""
-        for w in getattr(self, "extra_box", ttk.Frame()).winfo_children(): w.destroy()
-        mapped_sources = {m["source"] for m in self.mapping if m.get("source")}
+        """Zbuduj listę checkboxów 'Pozostałe kolumny' na podstawie self.df i self.mapping.
+           Przed wczytaniem presetu pokazujemy placeholder (brak listy)."""
+        for w in self.extra_box.winfo_children(): w.destroy()
         self.extra_vars = {}
-        if self.df is None: return
+        if self.df is None:
+            self._placeholder_in_extra("Wybierz plik Excel, aby rozpocząć.")
+            return
+        if not self.mapping:
+            self._placeholder_in_extra("Wczytaj preset, aby zobaczyć kolumny pozostające poza mapą.")
+            return
+        mapped_sources = {m["source"] for m in self.mapping if m.get("source")}
+        any_added = False
         for c in self.df.columns:
-            if c in mapped_sources:  # nie powielaj tego co już jest w mapie
+            if c in mapped_sources:
                 continue
             v = tk.BooleanVar(value=False)
             ttk.Checkbutton(self.extra_box, text=c, variable=v).pack(anchor="w", padx=8, pady=2)
             self.extra_vars[c] = v
+            any_added = True
+        if not any_added:
+            self._placeholder_in_extra("Brak dodatkowych kolumn — preset obejmuje wszystkie źródła.")
 
     # ---- Presety (GUI) ----
     def load_preset_dialog(self):
@@ -367,7 +381,10 @@ class App(tk.Tk):
     # ---- Handlery standardowe ----
     def pick_excel(self):
         p = filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx *.xls"), ("All","*.*")])
-        if p: self.in_entry.delete(0, tk.END); self.in_entry.insert(0, p)
+        if not p: return
+        self.in_entry.delete(0, tk.END); self.in_entry.insert(0, p)
+        # Automatyczne wczytanie kolumn po wyborze pliku
+        self.load_columns()
 
     def pick_outdir(self):
         d = filedialog.askdirectory()
@@ -375,7 +392,8 @@ class App(tk.Tk):
 
     def load_columns(self):
         path = self.in_entry.get().strip()
-        if not path: messagebox.showwarning("Brak pliku","Wskaż plik Excel."); return
+        if not path:
+            messagebox.showwarning("Brak pliku","Wskaż plik Excel."); return
         try:
             self.df = read_excel_any(path)
         except Exception as e:
@@ -385,7 +403,7 @@ class App(tk.Tk):
         self.mapping = []
         self.preset_label_var.set("(brak)")
         self.refresh_tree()
-        # pokaż wszystkie kolumny jako „pozostałe”
+        # „Pozostałe kolumny” – placeholder do czasu wczytania presetu
         self.rebuild_extra_columns()
         self.cmb_source.configure(values=[""] + list(self.df.columns))
 
@@ -417,7 +435,7 @@ class App(tk.Tk):
             "const": self.var_const.get(),
         }
         self.refresh_tree(); self.tree.selection_set(str(i))
-        # po zmianie źródła zaktualizuj listę „pozostałych kolumn”
+        # po zmianie mapy — odśwież „Pozostałe kolumny”
         self.rebuild_extra_columns()
 
     def move_selected(self, delta):
@@ -445,10 +463,11 @@ class App(tk.Tk):
     def add_blank_row(self):
         self.mapping.append({"enabled": True, "label": "", "source": "", "transform":"constant", "const":""})
         self.refresh_tree(); self.tree.selection_set(str(len(self.mapping)-1))
+        # brak źródła → nie wpływa na „pozostałe kolumny”
 
     def run(self):
         if self.df is None:
-            messagebox.showwarning("Brak danych","Najpierw wczytaj kolumny z Excela."); return
+            messagebox.showwarning("Brak danych","Najpierw wybierz plik Excel."); return
         out_dir = self.out_entry.get().strip() or os.path.dirname(self.in_entry.get()) or os.getcwd()
         if not os.path.isdir(out_dir):
             messagebox.showwarning("Folder","Podany folder wyjściowy nie istnieje."); return
@@ -456,7 +475,7 @@ class App(tk.Tk):
         extra = [k for k,v in self.extra_vars.items() if v.get()]
         if not self.mapping and not extra:
             messagebox.showwarning("Brak pól", "Mapa jest pusta i nie wybrano żadnych dodatkowych kolumn.\n"
-                                               "Wczytaj preset lub zaznacz kolumny w zakładce „Pozostałe kolumny”.")
+                                               "Wczytaj preset lub dodaj wiersze/kolumny.")
             return
         try:
             out_file = build_docx(
