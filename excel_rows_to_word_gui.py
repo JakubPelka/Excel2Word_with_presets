@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 Excel → mikro-tabele w Wordzie (GUI, Tkinter) z mapowaniem, kolejnością i transformacjami.
-Zmiany:
-- "Wczytaj i załaduj mapę" nad notebookiem
-- brak wartości -> " - " (poza transformacją 'constant')
-- help pod edytorem
-- "Dodaj wiersz" (pusty, constant)
+Nowe:
+- transformacja 'date_only' (obcięcie czasu),
+- opcja "Dodaj ramkę na mapę (po zdjęciu)",
+- help ma zawijanie tekstu,
+- page break po zdjęciu i ewentualnie mapie.
 """
 
 # ---------- BOOTSTRAP PIP ----------
@@ -49,6 +49,7 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from datetime import date, datetime
 
 EMU_PER_CM = 360000  # Word EMU -> cm
 
@@ -75,11 +76,29 @@ def tf_prelim_to_bedomning(val, row, comma=False):
 def tf_constant(val, row, comma=False, const_val=""):
     return const_val
 
+def tf_date_only(val, row, comma=False):
+    """Zwraca tylko część daty (YYYY-MM-DD). Obsługuje string/datetime."""
+    if _is_missing(val): return ""
+    try:
+        # jeśli datetime/Date/Timestamp
+        if isinstance(val, (datetime, date, pd.Timestamp)):
+            return pd.to_datetime(val).date().isoformat()
+        s = str(val).strip()
+        # typowe formaty: "YYYY-MM-DD HH:MM:SS" lub ISO "YYYY-MM-DDTHH:MM:SS"
+        if " " in s: s = s.split(" ")[0]
+        if "T" in s: s = s.split("T")[0]
+        # spróbuj sparsować
+        d = pd.to_datetime(s, errors="coerce")
+        return d.date().isoformat() if not pd.isna(d) else s
+    except Exception:
+        return str(val)
+
 TRANSFORMS = {
     "identity": ("Bez zmian", tf_identity),
     "m2_to_ha_round2": ("m² → ha (0,01)", tf_m2_to_ha_round2),
     "prelim_to_bedomning": ("0/nej → Säker, inne → Preliminärt", tf_prelim_to_bedomning),
     "constant": ("Stała wartość", tf_constant),
+    "date_only": ("Tylko data (YYYY-MM-DD)", tf_date_only),
 }
 
 # ---------- DOCX HELPERS ----------
@@ -121,15 +140,16 @@ def default_mapping(df_cols):
         {"enabled": True, "label": "Invasiva främmande arter",       "source": col("invasivaFrammandeArter"),  "transform": "identity",            "const": ""},
         {"enabled": True, "label": "Artvärde",                       "source": col("artvarden"),               "transform": "identity",            "const": ""},
         {"enabled": True, "label": "Motivering till naturvärdesklass","source":"",                             "transform": "constant",            "const": ""},
-        {"enabled": True, "label": "Datum för fältbesök",            "source": col("datumForObjektavgr"),      "transform": "identity",            "const": ""},
+        {"enabled": True, "label": "Datum för fältbesök",            "source": col("datumForObjektavgr"),      "transform": "date_only",           "const": ""},
         {"enabled": True, "label": "Inventerare",                    "source": col("utforare"),                "transform": "identity",            "const": ""},
         {"enabled": True, "label": "Bedömning",                      "source": col("preliminarAvgransning"),   "transform": "prelim_to_bedomning", "const": ""},
     ]
 
 # ---------- GENERACJA DOCX ----------
 def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
-               add_photo=True, photo_h_cm=6.0, page_break=False,
-               use_decimal_comma=True):
+               add_photo=True, photo_h_cm=6.0,
+               add_map=True, map_h_cm=6.0,
+               page_break=False, use_decimal_comma=True):
     doc = Document()
     section = doc.sections[0]
     section.left_margin = Cm(2); section.right_margin = Cm(2)
@@ -150,7 +170,6 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
             raw = row.get(src, "") if src else ""
             tf = TRANSFORMS.get(tf_key, TRANSFORMS["identity"])[1]
             val = tf(raw, row, use_decimal_comma, const_val=const_val) if tf_key=="constant" else tf(raw, row, use_decimal_comma)
-            # brak wartości -> " - " (poza constant)
             if tf_key != "constant" and (val is None or (isinstance(val,str) and val.strip()=="")):
                 val = " - "
             tr = table.add_row().cells
@@ -168,7 +187,16 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
             ph.rows[0].height = Cm(photo_h_cm); ph.cell(0, 0).width = Cm(content_w_cm)
             _set_cell_text(ph.cell(0, 0), " ")
             doc.add_paragraph("")
-        if page_break: doc.add_page_break()
+        if add_map:
+            p2 = doc.add_paragraph("Kartbild av objektet (infoga här):")
+            if p2.runs: p2.runs[0].font.size = Pt(10)
+            mp = doc.add_table(rows=1, cols=1); mp.style = "Table Grid"; mp.autofit = False
+            mp.rows[0].height = Cm(map_h_cm); mp.cell(0, 0).width = Cm(content_w_cm)
+            _set_cell_text(mp.cell(0, 0), " ")
+            doc.add_paragraph("")
+
+        if page_break:
+            doc.add_page_break()
 
     out_file = os.path.join(out_path, out_name if out_name.lower().endswith(".docx") else out_name + ".docx")
     doc.save(out_file); return out_file
@@ -178,7 +206,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Excel → Mikro-tabele Word (mapowanie)")
-        self.geometry("1000x760"); self.resizable(True, True)
+        self.geometry("1000x780"); self.resizable(True, True)
         self.df = None; self.mapping = []; self.extra_vars = {}
         self._build_ui()
 
@@ -194,7 +222,6 @@ class App(tk.Tk):
         ttk.Label(top, text="Nazwa pliku .docx:").grid(row=2, column=0, sticky="w", **pad)
         self.name_entry = ttk.Entry(top, width=40); self.name_entry.insert(0, "wynik.docx"); self.name_entry.grid(row=2, column=1, sticky="w", **pad)
 
-        # <- przycisk przeniesiony tutaj (nad notebookiem)
         ttk.Button(top, text="Wczytaj i załaduj mapę", command=self.load_columns)\
             .grid(row=3, column=0, columnspan=3, sticky="we", padx=8, pady=(2,8))
 
@@ -256,7 +283,6 @@ class App(tk.Tk):
         ttk.Button(ed, text="Zastosuj (aktualizuj wybrany)", command=self.apply_edit)\
             .grid(row=0, column=5, rowspan=2, sticky="nsw", padx=6, pady=4)
 
-        # przyciski listy
         btns = ttk.Frame(parent); btns.pack(fill="x", padx=8, pady=(0,4))
         ttk.Button(btns, text="↑", width=3, command=lambda: self.move_selected(-1)).pack(side="left", padx=2)
         ttk.Button(btns, text="↓", width=3, command=lambda: self.move_selected(1)).pack(side="left", padx=2)
@@ -264,12 +290,12 @@ class App(tk.Tk):
         ttk.Button(btns, text="Dodaj z kolumny…", command=self.add_from_column).pack(side="left", padx=8)
         ttk.Button(btns, text="Dodaj wiersz", command=self.add_blank_row).pack(side="left", padx=8)
 
-        # HELP
-        help_txt = ("Wybierz wiersz na liście, edytuj pola poniżej i kliknij „Zastosuj”. "
+        help_txt = ("Wybierz wiersz, edytuj pola poniżej i kliknij „Zastosuj”. "
                     "„Dodaj z kolumny…” tworzy wiersz mapujący istniejącą kolumnę. "
-                    "„Dodaj wiersz” tworzy pusty wpis z transformacją 'constant' – uzupełnij 'Stała'. "
+                    "„Dodaj wiersz” tworzy pusty wpis z transformacją 'constant' – uzupełnij pole „Stała”. "
                     "Brak wartości ze źródła daje „ - ” (nie dotyczy 'constant').")
-        ttk.Label(parent, text=help_txt, foreground="#555").pack(fill="x", padx=12, pady=(0,8))
+        ttk.Label(parent, text=help_txt, foreground="#555", wraplength=900, justify="left")\
+            .pack(fill="x", padx=12, pady=(0,8))
 
         self.tree.bind("<<TreeviewSelect>>", self.on_select_row)
 
@@ -277,14 +303,25 @@ class App(tk.Tk):
         opt = ttk.LabelFrame(parent, text="Opcje dokumentu")
         opt.pack(fill="x", padx=8, pady=8)
         self.var_photo = tk.BooleanVar(value=True); self.var_photo_h = tk.DoubleVar(value=6.0)
+        self.var_map = tk.BooleanVar(value=True);   self.var_map_h = tk.DoubleVar(value=6.0)
         self.var_break = tk.BooleanVar(value=True); self.var_comma = tk.BooleanVar(value=True)
-        ttk.Checkbutton(opt, text="Dodaj ramkę na zdjęcie po każdym rekordzie", variable=self.var_photo).grid(row=0, column=0, sticky="w", padx=8, pady=4)
-        ttk.Label(opt, text="Wysokość ramki [cm]:").grid(row=0, column=1, sticky="e")
-        ttk.Entry(opt, textvariable=self.var_photo_h, width=6).grid(row=0, column=2, sticky="w", padx=6)
-        ttk.Checkbutton(opt, text="Podział strony po każdym rekordzie", variable=self.var_break).grid(row=1, column=0, sticky="w", padx=8, pady=4)
-        ttk.Checkbutton(opt, text="Użyj przecinka dziesiętnego", variable=self.var_comma).grid(row=1, column=1, sticky="w", padx=8, pady=4)
 
-    # Handlery
+        ttk.Checkbutton(opt, text="Dodaj ramkę na zdjęcie po każdym rekordzie", variable=self.var_photo)\
+            .grid(row=0, column=0, sticky="w", padx=8, pady=4)
+        ttk.Label(opt, text="Wysokość [cm]:").grid(row=0, column=1, sticky="e")
+        ttk.Entry(opt, textvariable=self.var_photo_h, width=6).grid(row=0, column=2, sticky="w", padx=6)
+
+        ttk.Checkbutton(opt, text="Dodaj ramkę na mapę (po zdjęciu)", variable=self.var_map)\
+            .grid(row=1, column=0, sticky="w", padx=8, pady=4)
+        ttk.Label(opt, text="Wysokość [cm]:").grid(row=1, column=1, sticky="e")
+        ttk.Entry(opt, textvariable=self.var_map_h, width=6).grid(row=1, column=2, sticky="w", padx=6)
+
+        ttk.Checkbutton(opt, text="Podział strony po każdym rekordzie", variable=self.var_break)\
+            .grid(row=2, column=0, sticky="w", padx=8, pady=4)
+        ttk.Checkbutton(opt, text="Użyj przecinka dziesiętnego", variable=self.var_comma)\
+            .grid(row=2, column=1, sticky="w", padx=8, pady=4)
+
+    # Handlery i reszta – bez zmian poza przekazaniem nowych opcji
     def pick_excel(self):
         p = filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx *.xls"), ("All","*.*")])
         if p: self.in_entry.delete(0, tk.END); self.in_entry.insert(0, p)
@@ -311,7 +348,7 @@ class App(tk.Tk):
             ttk.Checkbutton(self.extra_box, text=c, variable=v).pack(anchor="w", padx=8, pady=2)
             self.extra_vars[c] = v
         self.cmb_source.configure(values=[""] + list(self.df.columns))
-        messagebox.showinfo("OK", "Załadowano kolumny i domyślną mapę.")
+        #messagebox.showinfo("OK", "Załadowano kolumny i domyślną mapę.")
 
     def refresh_tree(self):
         self.tree.delete(*self.tree.get_children())
@@ -363,7 +400,6 @@ class App(tk.Tk):
         self.refresh_tree(); self.tree.selection_set(str(len(self.mapping)-1))
 
     def add_blank_row(self):
-        # pusty, constant – do samodzielnego wypełnienia (bez auto ' - ')
         self.mapping.append({"enabled": True, "label": "", "source": "", "transform":"constant", "const":""})
         self.refresh_tree(); self.tree.selection_set(str(len(self.mapping)-1))
 
@@ -380,6 +416,8 @@ class App(tk.Tk):
                 self.df, list(self.mapping), extra, out_dir, out_name,
                 add_photo=self.var_photo.get(),
                 photo_h_cm=float(self.var_photo_h.get()),
+                add_map=self.var_map.get(),
+                map_h_cm=float(self.var_map_h.get()),
                 page_break=self.var_break.get(),
                 use_decimal_comma=self.var_comma.get(),
             )
