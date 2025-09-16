@@ -1,0 +1,40 @@
+{
+  "name": "Vardeelement (preset)",
+  "version": 1,
+  "options": {
+    "decimal_comma": true,
+    "page_break": true,
+    "photo": {
+      "enabled": true,
+      "height_cm": 6.0
+    },
+    "map": {
+      "enabled": true,
+      "height_cm": 6.0
+    }
+  },
+  "aliases": {},
+  "mapping": [
+    {
+      "enabled": true,
+      "label": "Värdeelement",
+      "source": "objektnummer",
+      "transform": "identity",
+      "const": ""
+    },
+    {
+      "enabled": true,
+      "label": "Värdeelementtyp",
+      "source": "vardeelementtyp",
+      "transform": "identity",
+      "const": ""
+    },
+    {
+      "enabled": true,
+      "label": "Objektbeskrivning",
+      "source": "objektbeskrivning",
+      "transform": "identity",
+      "const": ""
+    }
+  ]
+}

@@ -87,6 +87,35 @@ def tf_date_only(val, row, comma=False):
         return d.date().isoformat() if not pd.isna(d) else s
     except Exception:
         return str(val)
+        
+def tf_bool_ja_nej(val, row, comma=False):
+    """
+    Mapuje wartości logiczne/liczbowe na 'Ja'/'Nej'.
+    Obsługa: 1/0, 1.0/0.0, 'ja/nej', 'yes/no', 'true/false', 'y/n'.
+    Dla wartości nieznanych zwraca '', co w Wordzie da ' - ' (nasza zasada).
+    """
+    if _is_missing(val):
+        return ""
+    s = str(val).strip().lower()
+
+    # Najpierw spróbuj jako liczba (0/1, 0.0/1.0, '1,0' etc.)
+    try:
+        f = float(s.replace(",", "."))
+        return "Ja" if f != 0.0 else "Nej"
+    except Exception:
+        pass
+
+    positives = {"ja", "yes", "y", "true", "t"}
+    negatives = {"nej", "no", "n", "false", "f", "0"}
+
+    if s in positives:
+        return "Ja"
+    if s in negatives:
+        return "Nej"
+
+    # niepewne/nieznane -> puste (zostanie wyświetlone jako ' - ')
+    return ""
+
 
 TRANSFORMS = {
     "identity": ("Bez zmian", tf_identity),
@@ -94,6 +123,7 @@ TRANSFORMS = {
     "prelim_to_bedomning": ("0/nej → Säker, inne → Preliminärt", tf_prelim_to_bedomning),
     "constant": ("Stała wartość", tf_constant),
     "date_only": ("Tylko data (YYYY-MM-DD)", tf_date_only),
+    "bool_ja_nej": ("Bool → Ja/Nej", tf_bool_ja_nej),   # ← NOWE
 }
 
 # ---------- DOCX HELPERS ----------

@@ -1,0 +1,89 @@
+{
+  "name": "sst (preset)",
+  "version": 1,
+  "options": {
+    "decimal_comma": true,
+    "page_break": true,
+    "photo": {
+      "enabled": true,
+      "height_cm": 6.0
+    },
+    "map": {
+      "enabled": true,
+      "height_cm": 6.0
+    }
+  },
+  "aliases": {},
+  "mapping": [
+    {
+      "enabled": true,
+      "label": "Särskild skyddsvärt träd",
+      "source": "objektnummer",
+      "transform": "identity",
+      "const": ""
+    },
+    {
+      "enabled": true,
+      "label": "Svenskt namn",
+      "source": "taxon_svensktNamn",
+      "transform": "identity",
+      "const": ""
+    },
+    {
+      "enabled": true,
+      "label": "Trädstatus",
+      "source": "tradstatus",
+      "transform": "identity",
+      "const": ""
+    },
+    {
+      "enabled": true,
+      "label": "Stamomkrets",
+      "source": "stamomkrets",
+      "transform": "identity",
+      "const": ""
+    },
+    {
+      "enabled": true,
+      "label": "Objektbeskrivning",
+      "source": "objektbeskrivning",
+      "transform": "identity",
+      "const": ""
+    },
+    {
+      "enabled": true,
+      "label": "Tidigare kända värdearter",
+      "source": "vardearterKandaTidigare",
+      "transform": "identity",
+      "const": ""
+    },
+    {
+      "enabled": true,
+      "label": "Inventerade värdearter",
+      "source": "vardearterObserverade",
+      "transform": "identity",
+      "const": ""
+    },
+    {
+      "enabled": true,
+      "label": "Trädvitalitet",
+      "source": "tradvitalitet",
+      "transform": "identity",
+      "const": ""
+    },
+    {
+      "enabled": true,
+      "label": "Datum för fältbesök",
+      "source": "datumForObjektavgr",
+      "transform": "identity",
+      "const": ""
+    },
+    {
+      "enabled": true,
+      "label": "Inventerare",
+      "source": "utforare",
+      "transform": "identity",
+      "const": ""
+    }
+  ]
+}

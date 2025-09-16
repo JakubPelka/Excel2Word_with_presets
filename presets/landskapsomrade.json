@@ -1,0 +1,64 @@
+{
+  "name": "landskapsomrade (preset)",
+  "version": 1,
+  "options": {
+    "decimal_comma": true,
+    "page_break": true,
+    "photo": {
+      "enabled": true,
+      "height_cm": 6.0
+    },
+    "map": {
+      "enabled": true,
+      "height_cm": 6.0
+    }
+  },
+  "aliases": {
+    "objektbeskrivning": [
+      "objektBeskrivning"
+    ],
+    "vardelandskap": [
+      "värdelandskap",
+      "vardeLandskap",
+      "Värdelandskap"
+    ],
+    "motiveringVardelandskap": [
+      "motiveringVärdelandskap",
+      "motivering_vardelandskap"
+    ],
+    "objektidentitet": [
+      "objektIdentitet",
+      "Objektidentitet"
+    ]
+  },
+  "mapping": [
+    {
+      "enabled": true,
+      "label": "Objektbeskrivning",
+      "source": "objektbeskrivning",
+      "transform": "identity",
+      "const": ""
+    },
+    {
+      "enabled": true,
+      "label": "Värdelandskap",
+      "source": "vardelandskap",
+      "transform": "bool_ja_nej",
+      "const": ""
+    },
+    {
+      "enabled": true,
+      "label": "Motivering till värdelandskap",
+      "source": "motiveringVardelandskap",
+      "transform": "identity",
+      "const": ""
+    },
+    {
+      "enabled": true,
+      "label": "Landskapområde",
+      "source": "objektidentitet",
+      "transform": "identity",
+      "const": ""
+    }
+  ]
+}
