@@ -1,0 +1,4 @@
+taxon_svensktnamn -> livsmiljö 
+bedömning
+lämplighet
+objektbeskrivning

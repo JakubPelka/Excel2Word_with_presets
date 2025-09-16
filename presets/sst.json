@@ -29,14 +29,14 @@
       "transform": "identity",
       "const": ""
     },
-    {
+	{
       "enabled": true,
-      "label": "Trädstatus",
-      "source": "tradstatus",
+      "label": "Objektbeskrivning",
+      "source": "objektbeskrivning",
       "transform": "identity",
       "const": ""
     },
-    {
+	{
       "enabled": true,
       "label": "Stamomkrets",
       "source": "stamomkrets",
@@ -45,8 +45,15 @@
     },
     {
       "enabled": true,
-      "label": "Objektbeskrivning",
-      "source": "objektbeskrivning",
+      "label": "Trädstatus",
+      "source": "tradstatus",
+      "transform": "identity",
+      "const": ""
+    },
+     {
+      "enabled": true,
+      "label": "Trädvitalitet",
+      "source": "tradvitalitet",
       "transform": "identity",
       "const": ""
     },
@@ -64,11 +71,11 @@
       "transform": "identity",
       "const": ""
     },
-    {
+   	{
       "enabled": true,
-      "label": "Trädvitalitet",
-      "source": "tradvitalitet",
-      "transform": "identity",
+      "label": "Koordinater",
+      "source": "",
+      "transform": "constant",
       "const": ""
     },
     {

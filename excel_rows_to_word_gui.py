@@ -4,6 +4,7 @@ Excel → mikro-tabele w Wordzie (GUI, Tkinter) z mapowaniem, transformacjami i 
 UX:
 - Po wybraniu pliku Excel kolumny wczytują się automatycznie (brak osobnego przycisku).
 - „Pozostałe kolumny” pozostają puste do momentu wczytania presetu (zamiast listować wszystko).
+- Opcje: ramki foto/mapa, przecinek dziesiętny, podział strony, marginesy, sortowanie.
 """
 
 # ---------- BOOTSTRAP PIP ----------
@@ -55,10 +56,8 @@ EMU_PER_CM = 360000  # Word EMU -> cm
 # ---------- TRANSFORMACJE ----------
 def _is_missing(v):
     return v is None or (isinstance(v, float) and pd.isna(v)) or (isinstance(v, str) and v.strip()=="")
-
 def tf_identity(val, row, comma=False):
     return "" if _is_missing(val) else str(val)
-
 def tf_m2_to_ha_round2(val, row, comma=False):
     if _is_missing(val): return ""
     try:
@@ -67,14 +66,11 @@ def tf_m2_to_ha_round2(val, row, comma=False):
         return s.replace(".", ",") if comma else s
     except Exception:
         return ""
-
 def tf_prelim_to_bedomning(val, row, comma=False):
     v = "" if _is_missing(val) else str(val).strip().lower()
     return "Säker" if v in {"0","nej","no","false","0.0",""} else "Preliminärt"
-
 def tf_constant(val, row, comma=False, const_val=""):
     return const_val
-
 def tf_date_only(val, row, comma=False):
     if _is_missing(val): return ""
     try:
@@ -87,35 +83,20 @@ def tf_date_only(val, row, comma=False):
         return d.date().isoformat() if not pd.isna(d) else s
     except Exception:
         return str(val)
-        
 def tf_bool_ja_nej(val, row, comma=False):
-    """
-    Mapuje wartości logiczne/liczbowe na 'Ja'/'Nej'.
-    Obsługa: 1/0, 1.0/0.0, 'ja/nej', 'yes/no', 'true/false', 'y/n'.
-    Dla wartości nieznanych zwraca '', co w Wordzie da ' - ' (nasza zasada).
-    """
-    if _is_missing(val):
-        return ""
+    """1/0, 1.0/0.0, ja/nej, yes/no, true/false → 'Ja'/'Nej'; nieznane → '' (później ' - ')."""
+    if _is_missing(val): return ""
     s = str(val).strip().lower()
-
-    # Najpierw spróbuj jako liczba (0/1, 0.0/1.0, '1,0' etc.)
     try:
         f = float(s.replace(",", "."))
         return "Ja" if f != 0.0 else "Nej"
     except Exception:
         pass
-
-    positives = {"ja", "yes", "y", "true", "t"}
-    negatives = {"nej", "no", "n", "false", "f", "0"}
-
-    if s in positives:
-        return "Ja"
-    if s in negatives:
-        return "Nej"
-
-    # niepewne/nieznane -> puste (zostanie wyświetlone jako ' - ')
+    positives = {"ja","yes","y","true","t","1"}
+    negatives = {"nej","no","n","false","f","0"}
+    if s in positives: return "Ja"
+    if s in negatives: return "Nej"
     return ""
-
 
 TRANSFORMS = {
     "identity": ("Bez zmian", tf_identity),
@@ -123,7 +104,7 @@ TRANSFORMS = {
     "prelim_to_bedomning": ("0/nej → Säker, inne → Preliminärt", tf_prelim_to_bedomning),
     "constant": ("Stała wartość", tf_constant),
     "date_only": ("Tylko data (YYYY-MM-DD)", tf_date_only),
-    "bool_ja_nej": ("Bool → Ja/Nej", tf_bool_ja_nej),   # ← NOWE
+    "bool_ja_nej": ("Bool → Ja/Nej", tf_bool_ja_nej),
 }
 
 # ---------- DOCX HELPERS ----------
@@ -132,7 +113,6 @@ def _shade_cell(cell, fill_hex="F2F2F2"):
     shd = OxmlElement("w:shd")
     shd.set(qn("w:val"), "clear"); shd.set(qn("w:color"), "auto"); shd.set(qn("w:fill"), fill_hex)
     tcPr.append(shd)
-
 def _set_cell_text(cell, text, bold=False, size_pt=10):
     cell.text = "" if text is None else str(text)
     for p in cell.paragraphs:
@@ -149,43 +129,53 @@ def read_excel_any(path):
 # ---------- PRESETY: dopasowanie aliasów ----------
 def _norm(s: str) -> str:
     return "".join(ch for ch in str(s).lower() if ch.isalnum())
-
 def resolve_source_name(wanted: str, df_columns, aliases: dict) -> str:
     cols = list(map(str, df_columns))
     by_norm = {_norm(c): c for c in cols}
     candidates = [wanted] + list(aliases.get(wanted, [])) if wanted else []
     for cand in candidates:
         n = _norm(cand)
-        if n in by_norm:
-            return by_norm[n]
+        if n in by_norm: return by_norm[n]
         for c in cols:
-            if n and n in _norm(c):
-                return c
+            if n and n in _norm(c): return c
     return ""  # brak trafienia
 
 # ---------- GENERACJA DOCX ----------
 def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
                add_photo=True, photo_h_cm=6.0,
                add_map=True, map_h_cm=6.0,
-               page_break=False, use_decimal_comma=True):
+               page_break=False, use_decimal_comma=True,
+               margin_left_cm=2.0, margin_right_cm=2.0,
+               margin_top_cm=2.0, margin_bottom_cm=2.0):
     doc = Document()
     section = doc.sections[0]
-    section.left_margin = Cm(2); section.right_margin = Cm(2)
-    content_w_cm = (section.page_width - section.left_margin - section.right_margin) / EMU_PER_CM
-    left_w_cm, right_w_cm = 6.0, max(6.0, content_w_cm - 6.0)
+    # Marginesy
+    section.left_margin   = Cm(float(margin_left_cm))
+    section.right_margin  = Cm(float(margin_right_cm))
+    section.top_margin    = Cm(float(margin_top_cm))
+    section.bottom_margin = Cm(float(margin_bottom_cm))
 
-    # extra kolumny dorzucamy jako identity na końcu
+    # Szerokość treści po marginesach (w cm)
+    content_w_cm = (section.page_width - section.left_margin - section.right_margin) / EMU_PER_CM
+    left_w_cm  = 6.0
+    right_w_cm = max(6.0, content_w_cm - left_w_cm)
+
+    # Extra kolumny dopinamy na końcu
     for col_name in extra_cols:
         mapping_rows.append({"enabled": True, "label": col_name, "source": col_name, "transform": "identity", "const": ""})
 
     for _, row in df.iterrows():
         table = doc.add_table(rows=0, cols=2)
-        table.alignment = WD_TABLE_ALIGNMENT.LEFT; table.style = "Table Grid"; table.autofit = False
+        table.alignment = WD_TABLE_ALIGNMENT.LEFT
+        table.style = "Table Grid"
+        table.autofit = False
 
         for item in mapping_rows:
             if not item.get("enabled", False): continue
-            lbl = item.get("label",""); src = item.get("source","")
-            tf_key = item.get("transform","identity"); const_val = item.get("const","")
+            lbl = item.get("label","")
+            src = item.get("source","")
+            tf_key = item.get("transform","identity")
+            const_val = item.get("const","")
             raw = row.get(src, "") if src else ""
             tf = TRANSFORMS.get(tf_key, TRANSFORMS["identity"])[1]
             val = tf(raw, row, use_decimal_comma, const_val=const_val) if tf_key=="constant" else tf(raw, row, use_decimal_comma)
@@ -196,7 +186,8 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
             _set_cell_text(tr[1], val)
 
         for r in table.rows:
-            r.cells[0].width = Cm(left_w_cm); r.cells[1].width = Cm(right_w_cm)
+            r.cells[0].width = Cm(left_w_cm)
+            r.cells[1].width = Cm(right_w_cm)
 
         doc.add_paragraph("")
         if add_photo:
@@ -224,10 +215,10 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Excel → Mikro-tabele Word (presety)")
-        self.geometry("1000x800"); self.resizable(True, True)
-        self.df = None                  # DataFrame po wczytaniu Excela
-        self.mapping = []               # lista dictów (pusta do czasu wczytania presetu)
-        self.extra_vars = {}            # nazwa kolumny -> tk.BooleanVar()
+        self.geometry("1000x850"); self.resizable(True, True)
+        self.df = None
+        self.mapping = []
+        self.extra_vars = {}   # nazwa kolumny -> tk.BooleanVar()
         self.preset_label_var = tk.StringVar(value="(brak)")
         self._build_ui()
 
@@ -329,6 +320,12 @@ class App(tk.Tk):
         self.var_map = tk.BooleanVar(value=True);   self.var_map_h = tk.DoubleVar(value=6.0)
         self.var_break = tk.BooleanVar(value=True); self.var_comma = tk.BooleanVar(value=True)
 
+        # Marginesy [cm]
+        self.var_marg_l = tk.DoubleVar(value=2.0)
+        self.var_marg_r = tk.DoubleVar(value=2.0)
+        self.var_marg_t = tk.DoubleVar(value=2.0)
+        self.var_marg_b = tk.DoubleVar(value=2.0)
+
         ttk.Checkbutton(opt, text="Dodaj ramkę na zdjęcie po każdym rekordzie", variable=self.var_photo)\
             .grid(row=0, column=0, sticky="w", padx=8, pady=4)
         ttk.Label(opt, text="Wysokość [cm]:").grid(row=0, column=1, sticky="e")
@@ -344,6 +341,27 @@ class App(tk.Tk):
         ttk.Checkbutton(opt, text="Użyj przecinka dziesiętnego", variable=self.var_comma)\
             .grid(row=2, column=1, sticky="w", padx=8, pady=4)
 
+        # Marginesy [cm]
+        ttk.Label(opt, text="Marginesy [cm]:").grid(row=3, column=0, sticky="w", padx=8, pady=(10,4))
+        ttk.Label(opt, text="Lewy").grid(row=3, column=1, sticky="e");   ttk.Entry(opt, textvariable=self.var_marg_l, width=6).grid(row=3, column=2, sticky="w", padx=6)
+        ttk.Label(opt, text="Prawy").grid(row=3, column=3, sticky="e");  ttk.Entry(opt, textvariable=self.var_marg_r, width=6).grid(row=3, column=4, sticky="w", padx=6)
+        ttk.Label(opt, text="Górny").grid(row=4, column=1, sticky="e");  ttk.Entry(opt, textvariable=self.var_marg_t, width=6).grid(row=4, column=2, sticky="w", padx=6)
+        ttk.Label(opt, text="Dolny").grid(row=4, column=3, sticky="e");  ttk.Entry(opt, textvariable=self.var_marg_b, width=6).grid(row=4, column=4, sticky="w", padx=6)
+
+        # --- Sortowanie ---
+        sortf = ttk.LabelFrame(parent, text="Sortowanie")
+        sortf.pack(fill="x", padx=8, pady=(10,8))
+        self.var_sort_col = tk.StringVar(value="")        # pusta = bez sortowania
+        self.var_sort_asc = tk.BooleanVar(value=True)     # True=rosnąco, False=malejąco
+
+        ttk.Label(sortf, text="Kolumna:").grid(row=0, column=0, sticky="e", padx=8, pady=6)
+        self.cmb_sort_col = ttk.Combobox(sortf, textvariable=self.var_sort_col, width=40, values=[], state="readonly")
+        self.cmb_sort_col.grid(row=0, column=1, sticky="w", padx=4, pady=6)
+        ttk.Radiobutton(sortf, text="Rosnąco (A→Z / 0→9)", variable=self.var_sort_asc, value=True)\
+            .grid(row=0, column=2, sticky="w", padx=12)
+        ttk.Radiobutton(sortf, text="Malejąco (Z→A / 9→0)", variable=self.var_sort_asc, value=False)\
+            .grid(row=0, column=3, sticky="w", padx=12)
+
     # ---- Pomocnicze ----
     def _placeholder_in_extra(self, text):
         for w in self.extra_box.winfo_children(): w.destroy()
@@ -351,25 +369,20 @@ class App(tk.Tk):
             .pack(fill="x", padx=12, pady=12)
 
     def rebuild_extra_columns(self):
-        """Zbuduj listę checkboxów 'Pozostałe kolumny' na podstawie self.df i self.mapping.
-           Przed wczytaniem presetu pokazujemy placeholder (brak listy)."""
+        """Zbuduj listę checkboxów 'Pozostałe kolumny' po wczytaniu presetu."""
         for w in self.extra_box.winfo_children(): w.destroy()
         self.extra_vars = {}
         if self.df is None:
-            self._placeholder_in_extra("Wybierz plik Excel, aby rozpocząć.")
-            return
+            self._placeholder_in_extra("Wybierz plik Excel, aby rozpocząć."); return
         if not self.mapping:
-            self._placeholder_in_extra("Wczytaj preset, aby zobaczyć kolumny pozostające poza mapą.")
-            return
+            self._placeholder_in_extra("Wczytaj preset, aby zobaczyć kolumny pozostające poza mapą."); return
         mapped_sources = {m["source"] for m in self.mapping if m.get("source")}
         any_added = False
         for c in self.df.columns:
-            if c in mapped_sources:
-                continue
+            if c in mapped_sources: continue
             v = tk.BooleanVar(value=False)
             ttk.Checkbutton(self.extra_box, text=c, variable=v).pack(anchor="w", padx=8, pady=2)
-            self.extra_vars[c] = v
-            any_added = True
+            self.extra_vars[c] = v; any_added = True
         if not any_added:
             self._placeholder_in_extra("Brak dodatkowych kolumn — preset obejmuje wszystkie źródła.")
 
@@ -392,16 +405,17 @@ class App(tk.Tk):
             m["source"] = resolve_source_name(m.get("source",""), self.df.columns, aliases)
             new_mapping.append(m)
         self.mapping = new_mapping
-        # opcje z presetu
+        # opcje z presetu (jeśli są)
         opts = data.get("options", {})
-        self.var_comma.set(bool(opts.get("decimal_comma", self.var_comma.get())))
-        self.var_break.set(bool(opts.get("page_break", self.var_break.get())))
-        ph = opts.get("photo", {})
-        if "enabled" in ph: self.var_photo.set(bool(ph["enabled"]))
-        if "height_cm" in ph: self.var_photo_h.set(float(ph["height_cm"]))
-        mp = opts.get("map", {})
-        if "enabled" in mp: self.var_map.set(bool(mp["enabled"]))
-        if "height_cm" in mp: self.var_map_h.set(float(mp["height_cm"]))
+        if opts:
+            self.var_comma.set(bool(opts.get("decimal_comma", self.var_comma.get())))
+            self.var_break.set(bool(opts.get("page_break", self.var_break.get())))
+            ph = opts.get("photo", {})
+            if "enabled" in ph: self.var_photo.set(bool(ph["enabled"]))
+            if "height_cm" in ph: self.var_photo_h.set(float(ph["height_cm"]))
+            mp = opts.get("map", {})
+            if "enabled" in mp: self.var_map.set(bool(mp["enabled"]))
+            if "height_cm" in mp: self.var_map_h.set(float(mp["height_cm"]))
         # UI
         self.preset_label_var.set(data.get("name","(preset)"))
         self.refresh_tree()
@@ -435,7 +449,12 @@ class App(tk.Tk):
         self.refresh_tree()
         # „Pozostałe kolumny” – placeholder do czasu wczytania presetu
         self.rebuild_extra_columns()
-        self.cmb_source.configure(values=[""] + list(self.df.columns))
+        # comboboxy z listą kolumn
+        cols_list = [""] + list(self.df.columns)
+        self.cmb_source.configure(values=cols_list)
+        # sort: kolumna i reset kierunku
+        self.cmb_sort_col.configure(values=cols_list)
+        self.var_sort_col.set("")
 
     def refresh_tree(self):
         self.tree.delete(*self.tree.get_children())
@@ -465,7 +484,6 @@ class App(tk.Tk):
             "const": self.var_const.get(),
         }
         self.refresh_tree(); self.tree.selection_set(str(i))
-        # po zmianie mapy — odśwież „Pozostałe kolumny”
         self.rebuild_extra_columns()
 
     def move_selected(self, delta):
@@ -493,7 +511,6 @@ class App(tk.Tk):
     def add_blank_row(self):
         self.mapping.append({"enabled": True, "label": "", "source": "", "transform":"constant", "const":""})
         self.refresh_tree(); self.tree.selection_set(str(len(self.mapping)-1))
-        # brak źródła → nie wpływa na „pozostałe kolumny”
 
     def run(self):
         if self.df is None:
@@ -507,15 +524,39 @@ class App(tk.Tk):
             messagebox.showwarning("Brak pól", "Mapa jest pusta i nie wybrano żadnych dodatkowych kolumn.\n"
                                                "Wczytaj preset lub dodaj wiersze/kolumny.")
             return
+
+        # Sortowanie (opcjonalne)
+        df_use = self.df
+        col = self.var_sort_col.get().strip()
+        if col:
+            asc = self.var_sort_asc.get()
+            def _sort_key(s):
+                # Jeśli kolumna jest tekstowa, spróbuj sortować liczbowo (z przecinkami/kropkami)
+                if s.dtype == "O":
+                    s_num = pd.to_numeric(s.astype(str).str.replace(",", ".", regex=False), errors="coerce")
+                    if s_num.notna().any():
+                        return s_num
+                return s
+            try:
+                df_use = self.df.sort_values(by=col, ascending=asc, na_position="last", key=_sort_key)
+            except Exception:
+                # w razie problemów (np. brak kolumny) – generuj bez sortowania
+                df_use = self.df
+
         try:
             out_file = build_docx(
-                self.df, list(self.mapping), extra, out_dir, out_name,
+                df_use,
+                list(self.mapping), extra, out_dir, out_name,
                 add_photo=self.var_photo.get(),
                 photo_h_cm=float(self.var_photo_h.get()),
                 add_map=self.var_map.get(),
                 map_h_cm=float(self.var_map_h.get()),
                 page_break=self.var_break.get(),
                 use_decimal_comma=self.var_comma.get(),
+                margin_left_cm=float(self.var_marg_l.get()),
+                margin_right_cm=float(self.var_marg_r.get()),
+                margin_top_cm=float(self.var_marg_t.get()),
+                margin_bottom_cm=float(self.var_marg_b.get()),
             )
         except Exception as e:
             messagebox.showerror("Błąd", f"Nie udało się wygenerować DOCX:\n{e}"); return
