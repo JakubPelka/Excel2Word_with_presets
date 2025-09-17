@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Excel → mikro-tabele w Wordzie (GUI, Tkinter) z mapowaniem, transformacjami i presetami JSON.
-UX:
-- Po wybraniu pliku Excel kolumny wczytują się automatycznie (brak osobnego przycisku).
-- „Pozostałe kolumny” pozostają puste do momentu wczytania presetu (zamiast listować wszystko).
-- Opcje: ramki foto/mapa, przecinek dziesiętny, podział strony, marginesy, sortowanie.
+Excel → mikro-tabele w Wordzie (GUI, Tkinter) z mapowaniem, transformacjami, presetami JSON i układem A/B.
+Aktualizacja:
+- Układ B: jedna tabela 3‑kolumnowa (etykieta, wartość, zdjęcie-scala).
+- Spójne obramowanie: zewnętrzne i wewnętrzne linie mają ten sam styl (jak w Table Grid).
 """
 
 # ---------- BOOTSTRAP PIP ----------
@@ -120,6 +119,27 @@ def _set_cell_text(cell, text, bold=False, size_pt=10):
             r.font.bold = bold; r.font.size = Pt(size_pt)
     if cell.paragraphs: cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
 
+def _set_tbl_borders(table, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4, color="000000"):
+    """Ustaw grubość (w ósemkach punktu) dla krawędzi tabeli; 0 → brak linii (val='nil')."""
+    tbl = table._element  # CT_Tbl
+    tblPr = tbl.tblPr
+    if tblPr is None:
+        tblPr = OxmlElement('w:tblPr'); tbl.append(tblPr)
+    tblBorders = tblPr.find(qn('w:tblBorders'))
+    if tblBorders is None:
+        tblBorders = OxmlElement('w:tblBorders'); tblPr.append(tblBorders)
+    def set_edge(tag, val):
+        e = tblBorders.find(qn(f"w:{tag}"))
+        if e is None:
+            e = OxmlElement(f"w:{tag}"); tblBorders.append(e)
+        if val == 0:
+            e.set(qn("w:val"), "nil")
+        else:
+            e.set(qn("w:val"), "single"); e.set(qn("w:sz"), str(val))
+            e.set(qn("w:color"), color); e.set(qn("w:space"), "0")
+    set_edge("top", top); set_edge("left", left); set_edge("bottom", bottom); set_edge("right", right)
+    set_edge("insideH", insideH); set_edge("insideV", insideV)
+
 # ---------- EXCEL ----------
 def read_excel_any(path):
     ext = os.path.splitext(path.lower())[1]
@@ -138,21 +158,20 @@ def resolve_source_name(wanted: str, df_columns, aliases: dict) -> str:
         if n in by_norm: return by_norm[n]
         for c in cols:
             if n and n in _norm(c): return c
-    return ""  # brak trafienia
+    return ""
 
 # ---------- GENERACJA DOCX ----------
 def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
                add_photo=True, photo_h_cm=6.0,
                add_map=True, map_h_cm=6.0,
                page_break=False, use_decimal_comma=True,
-               margin_left_cm=2.0, margin_right_cm=2.0,
-               margin_top_cm=2.0, margin_bottom_cm=2.0,
+               margin_left_cm=2.0, margin_right_cm=6.5,
+               margin_top_cm=3.9, margin_bottom_cm=3.0,
                layout_mode="A"):
     """
-    layout_mode: 'A' albo 'B'
-      A: tabela, potem (foto?), potem (mapa?)
-      B: tabela po lewej + scalona kolumna na zdjęcie po prawej; mapa (opcjonalnie) pod spodem.
-         Jeśli add_photo=False -> zachowuje się jak A (bez kolumny zdjęcia).
+    layout_mode: 'A' — tabela → (foto?) → (mapa?)
+                 'B' — jedna tabela 3 kol.: [etykieta][wartość][foto]; mapa pod spodem.
+                 Jeśli add_photo=False → zachowuje się jak 'A'.
     """
     doc = Document()
     section = doc.sections[0]
@@ -165,95 +184,93 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
     # Szerokość treści po marginesach (w cm)
     content_w_cm = (section.page_width - section.left_margin - section.right_margin) / EMU_PER_CM
 
-    # --- Funkcja pomocnicza: zbuduj klasyczną tabelę 2 kol. (etykieta/wartość) ---
-    def build_info_table(parent_container, rows, col0_cm, col1_cm):
-        t = parent_container.add_table(rows=0, cols=2) if hasattr(parent_container, "add_table") else doc.add_table(rows=0, cols=2)
-        t.alignment = WD_TABLE_ALIGNMENT.LEFT; t.style = "Table Grid"; t.autofit = False
-        for item in rows:
-            if not item.get("enabled", False): continue
-            lbl = item.get("label",""); src = item.get("source","")
-            tf_key = item.get("transform","identity"); const_val = item.get("const","")
-            raw = cur_row.get(src, "") if src else ""
-            tf = TRANSFORMS.get(tf_key, TRANSFORMS["identity"])[1]
-            val = tf(raw, cur_row, use_decimal_comma, const_val=const_val) if tf_key=="constant" else tf(raw, cur_row, use_decimal_comma)
-            if tf_key != "constant" and (val is None or (isinstance(val,str) and val.strip()=="")):
-                val = " - "
-            cells = t.add_row().cells
-            _set_cell_text(cells[0], lbl, bold=True); _shade_cell(cells[0], "EAEAEA")
-            _set_cell_text(cells[1], val)
-        for r in t.rows:
-            r.cells[0].width = Cm(col0_cm); r.cells[1].width = Cm(col1_cm)
-        return t
-
-    # --- Dołącz pozostałe kolumny jako identity na końcu mapowania ---
+    # Dołącz pozostałe kolumny jako identity
     for col_name in extra_cols:
         mapping_rows.append({"enabled": True, "label": col_name, "source": col_name, "transform": "identity", "const": ""})
 
-    # --- Generacja dla każdego rekordu ---
     for _, cur_row in df.iterrows():
-        if layout_mode == "B" and add_photo:
-            # Domyślny podział szerokości: prawa kolumna na foto ok. 35% szerokości
-            right_photo_cm = max(5.0, min(8.5, content_w_cm * 0.35))
+        enabled_rows = [m for m in mapping_rows if m.get("enabled", False)]
+        if layout_mode == "B" and add_photo and enabled_rows:
+            right_photo_cm = max(5.0, min(9.0, content_w_cm * 0.35))
             left_outer_cm  = max(6.0, content_w_cm - right_photo_cm)
-
-            # Tabela zewnętrzna 2 kolumny: [info][foto]
-            outer = doc.add_table(rows=1, cols=2)
-            outer.style = "Table Grid"; outer.autofit = False
-            outer.alignment = WD_TABLE_ALIGNMENT.LEFT
-            # szerokości kolumn zewnętrznych
-            outer.rows[0].cells[0].width = Cm(left_outer_cm)
-            outer.rows[0].cells[1].width = Cm(right_photo_cm)
-
-            left_cell  = outer.cell(0,0)
-            right_cell = outer.cell(0,1)
-
-            # W LEWYM: tabela informacji (2 kolumny). Udział etykiety ~45% lewego bloku
             label_cm = max(3.5, min(7.0, left_outer_cm * 0.45))
             value_cm = max(3.5, left_outer_cm - label_cm)
-            build_info_table(left_cell, mapping_rows, label_cm, value_cm)
 
-            # W PRAWYM: podpis + ramka foto
-            if add_photo:
-                p = right_cell.paragraphs[0] if right_cell.paragraphs else right_cell.add_paragraph("")
-                run = p.add_run("Representativt foto:")
-                run.font.size = Pt(10)
-                # Jednokomórkowa ramka wewnątrz prawej komórki
-                ph = right_cell.add_table(rows=1, cols=1)
-                ph.style = "Table Grid"; ph.autofit = False
-                ph.rows[0].cells[0].width = Cm(right_photo_cm)
-                # Wysokość ramki: przez wysokość wiersza
-                ph.rows[0].height = Cm(float(photo_h_cm))
-                _set_cell_text(ph.cell(0, 0), " ")
+            t = doc.add_table(rows=len(enabled_rows), cols=3)
+            t.style = "Table Grid"; t.autofit = False; t.alignment = WD_TABLE_ALIGNMENT.LEFT
+
+            for i, item in enumerate(enabled_rows):
+                lbl = item.get("label",""); src = item.get("source","")
+                tf_key = item.get("transform","identity"); const_val = item.get("const","")
+                raw = cur_row.get(src, "") if src else ""
+                tf = TRANSFORMS.get(tf_key, TRANSFORMS["identity"])[1]
+                val = tf(raw, cur_row, use_decimal_comma, const_val=const_val) if tf_key=="constant" else tf(raw, cur_row, use_decimal_comma)
+                if tf_key != "constant" and (val is None or (isinstance(val,str) and val.strip()=="")):
+                    val = " - "
+                _set_cell_text(t.cell(i,0), lbl, bold=True); _shade_cell(t.cell(i,0), "EAEAEA")
+                _set_cell_text(t.cell(i,1), val)
+
+            for r in t.rows:
+                r.cells[0].width = Cm(label_cm); r.cells[1].width = Cm(value_cm); r.cells[2].width = Cm(right_photo_cm)
+
+            merged = t.cell(0,2)
+            for i in range(1, len(enabled_rows)):
+                merged = merged.merge(t.cell(i,2))
+            p = merged.paragraphs[0] if merged.paragraphs else merged.add_paragraph("")
+            p.add_run("Representativt foto:").font.size = Pt(10)
+
+            # SPÓJNE krawędzie: zewnętrzne i wewnętrzne 4/8 pt
+            _set_tbl_borders(t, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4)
+
             doc.add_paragraph("")
-            # Mapa na dole (jeśli włączona)
             if add_map:
-                p2 = doc.add_paragraph("Kartbild av objektet:")
+                p2 = doc.add_paragraph("Kartbild av objektet (infoga här):")
                 if p2.runs: p2.runs[0].font.size = Pt(10)
                 mp = doc.add_table(rows=1, cols=1); mp.style = "Table Grid"; mp.autofit = False
                 mp.rows[0].height = Cm(map_h_cm); mp.cell(0, 0).width = Cm(content_w_cm)
                 _set_cell_text(mp.cell(0, 0), " ")
+                _set_tbl_borders(mp, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4)
                 doc.add_paragraph("")
 
         else:
-            # Układ A (lub fallback, jeśli w B brak zdjęcia)
-            # Klasyczna tabela 2 kolumny
+            # Układ A
             left_w_cm  = 6.0
             right_w_cm = max(6.0, content_w_cm - left_w_cm)
-            build_info_table(doc, mapping_rows, left_w_cm, right_w_cm)
+            t = doc.add_table(rows=0, cols=2)
+            t.alignment = WD_TABLE_ALIGNMENT.LEFT; t.style = "Table Grid"; t.autofit = False
+            for item in enabled_rows or mapping_rows:
+                if not item.get("enabled", False): continue
+                lbl = item.get("label",""); src = item.get("source","")
+                tf_key = item.get("transform","identity"); const_val = item.get("const","")
+                raw = cur_row.get(src, "") if src else ""
+                tf = TRANSFORMS.get(tf_key, TRANSFORMS["identity"])[1]
+                val = tf(raw, cur_row, use_decimal_comma, const_val=const_val) if tf_key=="constant" else tf(raw, cur_row, use_decimal_comma)
+                if tf_key != "constant" and (val is None or (isinstance(val,str) and val.strip()=="")):
+                    val = " - "
+                cells = t.add_row().cells
+                _set_cell_text(cells[0], lbl, bold=True); _shade_cell(cells[0], "EAEAEA")
+                _set_cell_text(cells[1], val)
+            for r in t.rows:
+                r.cells[0].width = Cm(left_w_cm); r.cells[1].width = Cm(right_w_cm)
+
+            _set_tbl_borders(t, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4)
+
             doc.add_paragraph("")
             if add_photo:
-                p = doc.add_paragraph("Representativt foto:")
+                p = doc.add_paragraph("Representativt foto (infoga här):")
                 if p.runs: p.runs[0].font.size = Pt(10)
                 ph = doc.add_table(rows=1, cols=1); ph.style = "Table Grid"; ph.autofit = False
                 ph.rows[0].height = Cm(photo_h_cm); ph.cell(0, 0).width = Cm(content_w_cm)
                 _set_cell_text(ph.cell(0, 0), " ")
+                _set_tbl_borders(ph, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4)
                 doc.add_paragraph("")
             if add_map:
-                p2 = doc.add_paragraph("Kartbild av objektet:")
+                p2 = doc.add_paragraph("Kartbild av objektet (infoga här):")
                 if p2.runs: p2.runs[0].font.size = Pt(10)
                 mp = doc.add_table(rows=1, cols=1); mp.style = "Table Grid"; mp.autofit = False
                 mp.rows[0].height = Cm(map_h_cm); mp.cell(0, 0).width = Cm(content_w_cm)
                 _set_cell_text(mp.cell(0, 0), " ")
+                _set_tbl_borders(mp, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4)
                 doc.add_paragraph("")
 
         if page_break:
@@ -374,9 +391,9 @@ class App(tk.Tk):
 
         # Marginesy [cm]
         self.var_marg_l = tk.DoubleVar(value=2.0)
-        self.var_marg_r = tk.DoubleVar(value=2.0)
-        self.var_marg_t = tk.DoubleVar(value=2.0)
-        self.var_marg_b = tk.DoubleVar(value=2.0)
+        self.var_marg_r = tk.DoubleVar(value=6.5)
+        self.var_marg_t = tk.DoubleVar(value=3.9)
+        self.var_marg_b = tk.DoubleVar(value=3.0)
 
         ttk.Checkbutton(opt, text="Dodaj ramkę na zdjęcie po każdym rekordzie", variable=self.var_photo)\
             .grid(row=0, column=0, sticky="w", padx=8, pady=4)
@@ -419,7 +436,7 @@ class App(tk.Tk):
         self.var_layout = tk.StringVar(value="A")
         ttk.Radiobutton(lay, text="A — tabela, pod spodem: zdjęcie i/lub mapa", variable=self.var_layout, value="A")\
             .grid(row=0, column=0, sticky="w", padx=8, pady=6)
-        ttk.Radiobutton(lay, text="B — tabela po lewej + kolumna na zdjęcie po prawej; mapa pod spodem", variable=self.var_layout, value="B")\
+        ttk.Radiobutton(lay, text="B — tabela po lewej + scalona kolumna na zdjęcie po prawej; mapa pod spodem", variable=self.var_layout, value="B")\
             .grid(row=1, column=0, sticky="w", padx=8, pady=6)
 
     # ---- Pomocnicze ----
@@ -429,7 +446,6 @@ class App(tk.Tk):
             .pack(fill="x", padx=12, pady=12)
 
     def rebuild_extra_columns(self):
-        """Zbuduj listę checkboxów 'Pozostałe kolumny' po wczytaniu presetu."""
         for w in self.extra_box.winfo_children(): w.destroy()
         self.extra_vars = {}
         if self.df is None:
@@ -465,7 +481,6 @@ class App(tk.Tk):
             m["source"] = resolve_source_name(m.get("source",""), self.df.columns, aliases)
             new_mapping.append(m)
         self.mapping = new_mapping
-        # opcje z presetu (jeśli są)
         opts = data.get("options", {})
         if opts:
             self.var_comma.set(bool(opts.get("decimal_comma", self.var_comma.get())))
@@ -476,7 +491,6 @@ class App(tk.Tk):
             mp = opts.get("map", {})
             if "enabled" in mp: self.var_map.set(bool(mp["enabled"]))
             if "height_cm" in mp: self.var_map_h.set(float(mp["height_cm"]))
-        # UI
         self.preset_label_var.set(data.get("name","(preset)"))
         self.refresh_tree()
         self.rebuild_extra_columns()
@@ -487,7 +501,6 @@ class App(tk.Tk):
         p = filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx *.xls"), ("All","*.*")])
         if not p: return
         self.in_entry.delete(0, tk.END); self.in_entry.insert(0, p)
-        # Automatyczne wczytanie kolumn po wyborze pliku
         self.load_columns()
 
     def pick_outdir(self):
@@ -503,16 +516,12 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror("Błąd wczytywania", f"Nie udało się wczytać Excela:\n{e}\n\nJeśli to .xls, wymagany xlrd>=2.0.1.")
             return
-        # start bez mapy (czysta lista) – preset wczytujesz ręcznie
         self.mapping = []
         self.preset_label_var.set("(brak)")
         self.refresh_tree()
-        # „Pozostałe kolumny” – placeholder do czasu wczytania presetu
         self.rebuild_extra_columns()
-        # comboboxy z listą kolumn
         cols_list = [""] + list(self.df.columns)
         self.cmb_source.configure(values=cols_list)
-        # sort: kolumna i reset kierunku
         self.cmb_sort_col.configure(values=cols_list)
         self.var_sort_col.set("")
 
@@ -591,7 +600,6 @@ class App(tk.Tk):
         if col:
             asc = self.var_sort_asc.get()
             def _sort_key(s):
-                # Jeśli kolumna jest tekstowa, spróbuj sortować liczbowo (z przecinkami/kropkami)
                 if s.dtype == "O":
                     s_num = pd.to_numeric(s.astype(str).str.replace(",", ".", regex=False), errors="coerce")
                     if s_num.notna().any():
