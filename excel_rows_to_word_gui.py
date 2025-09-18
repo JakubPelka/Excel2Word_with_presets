@@ -207,7 +207,7 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
                 val = tf(raw, cur_row, use_decimal_comma, const_val=const_val) if tf_key=="constant" else tf(raw, cur_row, use_decimal_comma)
                 if tf_key != "constant" and (val is None or (isinstance(val,str) and val.strip()=="")):
                     val = " - "
-                _set_cell_text(t.cell(i,0), lbl, bold=True); _shade_cell(t.cell(i,0), "EAEAEA")
+                _set_cell_text(t.cell(i,0), lbl, bold=True); _shade_cell(t.cell(i,0), "F2F2F2")
                 _set_cell_text(t.cell(i,1), val)
 
             for r in t.rows:
@@ -224,7 +224,7 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
 
             doc.add_paragraph("")
             if add_map:
-                p2 = doc.add_paragraph("Kartbild av objektet (infoga här):")
+                p2 = doc.add_paragraph("Kartbild av objektet:")
                 if p2.runs: p2.runs[0].font.size = Pt(10)
                 mp = doc.add_table(rows=1, cols=1); mp.style = "Table Grid"; mp.autofit = False
                 mp.rows[0].height = Cm(map_h_cm); mp.cell(0, 0).width = Cm(content_w_cm)
@@ -248,7 +248,7 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
                 if tf_key != "constant" and (val is None or (isinstance(val,str) and val.strip()=="")):
                     val = " - "
                 cells = t.add_row().cells
-                _set_cell_text(cells[0], lbl, bold=True); _shade_cell(cells[0], "EAEAEA")
+                _set_cell_text(cells[0], lbl, bold=True); _shade_cell(cells[0], "F2F2F2")
                 _set_cell_text(cells[1], val)
             for r in t.rows:
                 r.cells[0].width = Cm(left_w_cm); r.cells[1].width = Cm(right_w_cm)
@@ -257,7 +257,7 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
 
             doc.add_paragraph("")
             if add_photo:
-                p = doc.add_paragraph("Representativt foto (infoga här):")
+                p = doc.add_paragraph("Representativt foto:")
                 if p.runs: p.runs[0].font.size = Pt(10)
                 ph = doc.add_table(rows=1, cols=1); ph.style = "Table Grid"; ph.autofit = False
                 ph.rows[0].height = Cm(photo_h_cm); ph.cell(0, 0).width = Cm(content_w_cm)
@@ -265,7 +265,7 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
                 _set_tbl_borders(ph, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4)
                 doc.add_paragraph("")
             if add_map:
-                p2 = doc.add_paragraph("Kartbild av objektet (infoga här):")
+                p2 = doc.add_paragraph("Kartbild av objektet:")
                 if p2.runs: p2.runs[0].font.size = Pt(10)
                 mp = doc.add_table(rows=1, cols=1); mp.style = "Table Grid"; mp.autofit = False
                 mp.rows[0].height = Cm(map_h_cm); mp.cell(0, 0).width = Cm(content_w_cm)
