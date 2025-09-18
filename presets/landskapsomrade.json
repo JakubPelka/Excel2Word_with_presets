@@ -34,6 +34,13 @@
   "mapping": [
     {
       "enabled": true,
+      "label": "Landskapområde",
+      "source": "objektidentitet",
+      "transform": "identity",
+      "const": ""
+    },
+	{
+      "enabled": true,
       "label": "Objektbeskrivning",
       "source": "objektbeskrivning",
       "transform": "identity",
@@ -52,13 +59,7 @@
       "source": "motiveringVardelandskap",
       "transform": "identity",
       "const": ""
-    },
-    {
-      "enabled": true,
-      "label": "Landskapområde",
-      "source": "objektidentitet",
-      "transform": "identity",
-      "const": ""
     }
+    
   ]
 }
