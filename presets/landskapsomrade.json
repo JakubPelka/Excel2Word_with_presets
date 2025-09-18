@@ -34,7 +34,7 @@
   "mapping": [
     {
       "enabled": true,
-      "label": "Landskapområde",
+      "label": "Landskapsområde",
       "source": "objektidentitet",
       "transform": "identity",
       "const": ""
