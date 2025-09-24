@@ -387,8 +387,8 @@ class App(tk.Tk):
         self.var_img_dir = tk.StringVar(value="")
         self.var_img_col = tk.StringVar(value="objektnummer")
         # czcionka
-        self.var_font_name = tk.StringVar(value="Calibri")
-        self.var_font_size = tk.DoubleVar(value=10.0)
+        self.var_font_name = tk.StringVar(value="Arial")
+        self.var_font_size = tk.DoubleVar(value=9.0)
         # szerokości kolumn
         self.var_A_label_cm = tk.DoubleVar(value=6.0)
         self.var_B_label_cm = tk.DoubleVar(value=0.0)   # 0 = auto
@@ -505,9 +505,9 @@ class App(tk.Tk):
 
         # Marginesy [cm]
         self.var_marg_l = tk.DoubleVar(value=2.0)
-        self.var_marg_r = tk.DoubleVar(value=2.0)
-        self.var_marg_t = tk.DoubleVar(value=2.0)
-        self.var_marg_b = tk.DoubleVar(value=2.0)
+        self.var_marg_r = tk.DoubleVar(value=6.5)
+        self.var_marg_t = tk.DoubleVar(value=3.9)
+        self.var_marg_b = tk.DoubleVar(value=3.0)
 
         ttk.Checkbutton(opt, text="Dodaj ramkę na zdjęcie po każdym rekordzie", variable=self.var_photo)\
             .grid(row=0, column=0, sticky="w", padx=8, pady=4)
