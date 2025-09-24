@@ -1,0 +1,61 @@
+{
+  "name": "Livsmiljöer (preset)",
+  "version": 1,
+  "options": {
+    "decimal_comma": true,
+    "page_break": true,
+    "photo": {
+      "enabled": true,
+      "height_cm": 6.0
+    },
+    "map": {
+      "enabled": true,
+      "height_cm": 6.0
+    }
+  },
+  "aliases": {},
+  "mapping": [
+    {
+      "enabled": true,
+      "label": "Livsmiljö",
+      "source": "objektnummer",
+      "transform": "identity",
+      "const": ""
+    },
+	{
+      "enabled": true,
+      "label": "Bedömning",
+      "source": "livsmiljonsLamplighet",
+      "transform": "identity",
+      "const": ""
+    },
+	{
+      "enabled": true,
+      "label": "Objektbeskrivning",
+      "source": "objektbeskrivning",
+      "transform": "identity",
+      "const": ""
+    },
+	{
+      "enabled": true,
+      "label": "Metod",
+      "source": "taxon_svensktNamn",
+      "transform": "identity",
+      "const": ""
+    },	
+	{
+      "enabled": true,
+      "label": "Datum för fältbesök",
+      "source": "datumForObjektavgr",
+      "transform": "identity",
+      "const": ""
+    },
+	{
+      "enabled": true,
+      "label": "Inventerare",
+      "source": "utforare",
+      "transform": "identity",
+      "const": ""
+    }
+  ]
+}

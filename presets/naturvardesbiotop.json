@@ -32,7 +32,7 @@
     { "enabled": true,  "label": "Inventerade värdearter",          "source": "vardearterObserverade",    "transform": "identity",              "const": "" },
     { "enabled": true,  "label": "Invasiva främmande arter",        "source": "invasivaFrammandeArter",   "transform": "identity",              "const": "" },
     { "enabled": true,  "label": "Artvärde",                        "source": "artvarden",                "transform": "identity",              "const": "" },
-    { "enabled": true,  "label": "Motivering till naturvärdesklass","source": "",                         "transform": "constant",              "const": "" },
+    { "enabled": true,  "label": "Motivering till naturvärdesklass","source": "",                         "transform": "constant",              "const": "En samlad bedömning av biotop- och artvärde motiverar att naturvärdesbiotopen bedöms hålla XXXXX naturvärde" },
     { "enabled": true,  "label": "Datum för fältbesök",             "source": "datumForObjektavgr",       "transform": "date_only",             "const": "" },
     { "enabled": true,  "label": "Inventerare",                     "source": "utforare",                 "transform": "identity",              "const": "" },
     { "enabled": true,  "label": "Bedömning",                       "source": "preliminarAvgransning",    "transform": "prelim_to_bedomning",   "const": "" }

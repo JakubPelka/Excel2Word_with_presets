@@ -38,7 +38,7 @@
     },
 	{
       "enabled": true,
-      "label": "Stamomkrets",
+      "label": "Stamomkrets (cm)",
       "source": "stamomkrets",
       "transform": "identity",
       "const": ""
