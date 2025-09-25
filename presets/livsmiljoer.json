@@ -51,6 +51,13 @@
       "const": ""
     },
 	{
+	  "enabled": false,
+	  "label": "Koordinater",
+	  "sources": ["x", "y"],
+	  "transform": "format",
+	  "const": "{x} N, {y} Ö"
+	},
+	{
       "enabled": true,
       "label": "Inventerare",
       "source": "utforare",

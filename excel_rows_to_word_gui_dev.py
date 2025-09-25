@@ -5,13 +5,14 @@ auto-zdjęciami (match po kolumnie) + szerokościami kolumn + czcionką + LOG + 
 + podział ramki zdjęcia na 2 pola
 + foto #2: sufiksy _2, -2, (2),  (2) oraz centrowanie zdjęć
 
-DOMYŚLNE (zgodnie z prośbą):
+DOMYŚLNE:
 - JPG=90, DPI=450
 - Arial 9 pt
 - Marginesy: L=2.0, P=6.5, G=3.9, D=3.0
 
 NOWOŚĆ:
 - pierwszy wiersz każdej głównej tabeli = nagłówek: tło #A6A6A6, biały pogrubiony tekst
+- transform "format": łączenie wartości z wielu kolumn wg szablonu (const) i "sources"
 """
 
 # ---------- BOOTSTRAP PIP ----------
@@ -136,6 +137,36 @@ def tf_bool_ja_nej(val, row, comma=False):
     if s in negatives: return "Nej"
     return ""
 
+def tf_format(val, row, comma=False, const_val="", sources=None):
+    """
+    Składa tekst wg szablonu const_val z wielu kolumn (sources).
+    Przykład:
+      sources = ["xcoord", "ycoord"]
+      const_val = "{xcoord}, {ycoord}"
+    """
+    sources = sources or []
+    data = {}
+    for name in sources:
+        v = row.get(name, "")
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            v = ""
+        else:
+            v = str(v)
+            if comma:
+                # spróbuj zamienić . na , dla liczb
+                try:
+                    float(v.replace(",", "."))
+                    v = v.replace(".", ",")
+                except Exception:
+                    pass
+        data[name] = v
+    fmt = const_val or " ".join("{" + s + "}" for s in sources)
+    try:
+        out = fmt.format(**data)
+    except Exception:
+        out = " ".join(data.get(s, "") for s in sources)
+    return out.strip()
+
 TRANSFORMS = {
     "identity": ("Bez zmian", tf_identity),
     "m2_to_ha_round2": ("m² → ha (0,01)", tf_m2_to_ha_round2),
@@ -143,6 +174,7 @@ TRANSFORMS = {
     "constant": ("Stała wartość", tf_constant),
     "date_only": ("Tylko data (YYYY-MM-DD)", tf_date_only),
     "bool_ja_nej": ("Bool → Ja/Nej", tf_bool_ja_nej),
+    "format": ("Formatuj z wielu kolumn", tf_format),
 }
 
 # ---------- DOCX HELPERS ----------
@@ -396,6 +428,24 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
             img_path = find_image_for(id_val, images_dir, logger=logger)
             img2_path = find_image_for_second(id_val, images_dir, logger=logger)
 
+        def _compute_value(item):
+            lbl = item.get("label",""); src = item.get("source","")
+            tf_key = item.get("transform","identity"); const_val = item.get("const","")
+            sources = item.get("sources", [])
+            raw = cur_row.get(src, "") if src else ""
+            tf = TRANSFORMS.get(tf_key, TRANSFORMS["identity"])[1]
+            try:
+                val = tf(raw, cur_row, use_decimal_comma, const_val=const_val, sources=sources)
+            except TypeError:
+                # kompatybilnie z transformami nieobsługującymi 'sources' / 'const_val'
+                if tf_key == "constant":
+                    val = tf(raw, cur_row, use_decimal_comma, const_val=const_val)
+                else:
+                    val = tf(raw, cur_row, use_decimal_comma)
+            if tf_key != "constant" and (val is None or (isinstance(val,str) and val.strip()=="")):
+                val = " - "
+            return lbl, val
+
         if layout_mode == "B" and add_photo and enabled_rows:
             # szerokości B (0=auto)
             photo_cm = b_photo_cm if (b_photo_cm and b_photo_cm > 0) else max(5.0, min(9.0, content_w_cm * 0.35))
@@ -409,13 +459,7 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
             t.style = "Table Grid"; t.autofit = False; t.alignment = WD_TABLE_ALIGNMENT.LEFT
 
             for i, item in enumerate(enabled_rows):
-                lbl = item.get("label",""); src = item.get("source","")
-                tf_key = item.get("transform","identity"); const_val = item.get("const","")
-                raw = cur_row.get(src, "") if src else ""
-                tf = TRANSFORMS.get(tf_key, TRANSFORMS["identity"])[1]
-                val = tf(raw, cur_row, use_decimal_comma, const_val=const_val) if tf_key=="constant" else tf(raw, cur_row, use_decimal_comma)
-                if tf_key != "constant" and (val is None or (isinstance(val,str) and val.strip()=="")):
-                    val = " - "
+                lbl, val = _compute_value(item)
                 _set_cell_text(t.cell(i,0), lbl, bold=True, size_pt=base_font_size_pt, font_name=base_font_name); _shade_cell(t.cell(i,0), "F2F2F2")
                 _set_cell_text(t.cell(i,1), val, bold=False, size_pt=base_font_size_pt, font_name=base_font_name)
 
@@ -429,7 +473,6 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
             merged = t.cell(0,2)
             for i in range(1, len(enabled_rows)):
                 merged = merged.merge(t.cell(i,2))
-            # (nie nadpisujemy shadingu, żeby pasek nagłówka przy wierszu 0 został widoczny)
             p = merged.paragraphs[0] if merged.paragraphs else merged.add_paragraph("")
             p.alignment = WD_ALIGN_PARAGRAPH.LEFT
             run = p.add_run("Representativt foto:")
@@ -478,13 +521,7 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
             t.alignment = WD_TABLE_ALIGNMENT.LEFT; t.style = "Table Grid"; t.autofit = False
             for item in enabled_rows or mapping_rows:
                 if not item.get("enabled", False): continue
-                lbl = item.get("label",""); src = item.get("source","")
-                tf_key = item.get("transform","identity"); const_val = item.get("const","")
-                raw = cur_row.get(src, "") if src else ""
-                tf = TRANSFORMS.get(tf_key, TRANSFORMS["identity"])[1]
-                val = tf(raw, cur_row, use_decimal_comma, const_val=const_val) if tf_key=="constant" else tf(raw, cur_row, use_decimal_comma)
-                if tf_key != "constant" and (val is None or (isinstance(val,str) and val.strip()=="")):
-                    val = " - "
+                lbl, val = _compute_value(item)
                 cells = t.add_row().cells
                 _set_cell_text(cells[0], lbl, bold=True, size_pt=base_font_size_pt, font_name=base_font_name); _shade_cell(cells[0], "F2F2F2")
                 _set_cell_text(cells[1], val, bold=False, size_pt=base_font_size_pt, font_name=base_font_name)
@@ -547,7 +584,7 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Excel → Mikro-tabele Word — presety, układ A/B, 2-zdjęcia (_2/-2/(2)), foto-match, kolumny, czcionka, log, kompresja")
+        self.title("Excel → Mikro-tabele Word — presety, układ A/B, 2-zdjęcia (_2/-2/(2)), foto-match, kolumny, czcionka, log, kompresja, format()")
         self.geometry("1180x980"); self.resizable(True, True)
         self.df = None
         self.mapping = []
@@ -556,15 +593,14 @@ class App(tk.Tk):
         # zdjęcia
         self.var_img_dir = tk.StringVar(value="")
         self.var_img_col = tk.StringVar(value="objektnummer")
-        # foto-kompresja — DOMYŚLNE wg wymagań
+        # foto-kompresja — DOMYŚLNE
         self.var_jpg_quality = tk.IntVar(value=90)
         self.var_export_dpi = tk.IntVar(value=450)
         self.var_no_upscale = tk.BooleanVar(value=True)
         # foto: podział na 2 pola
         self.var_photo_split = tk.BooleanVar(value=True)
-        # czcionka — DOMYŚLNE wg wymagań
+        # czcionka — DOMYŚLNE
         self.var_font_name = tk.StringVar(value="Arial")
-        # Uwaga: 9.0 pt
         self.var_font_size = tk.DoubleVar(value=9.0)
         # szerokości kolumn
         self.var_A_label_cm = tk.DoubleVar(value=6.0)
@@ -625,9 +661,9 @@ class App(tk.Tk):
             ("order","Kolej.",60),
             ("#on","Włącz",60),
             ("label","Nowa nazwa",260),
-            ("source","Źródło",240),
-            ("transform","Transformacja",240),
-            ("const","Stała",200),
+            ("source","Źródło",320),
+            ("transform","Transformacja",200),
+            ("const","Stała / Format",260),
         ]:
             self.tree.heading(c, text=txt); self.tree.column(c, width=w, anchor="w")
         self.tree.pack(fill="both", expand=True, padx=8, pady=8)
@@ -651,7 +687,7 @@ class App(tk.Tk):
                                           values=[k for k in TRANSFORMS], state="readonly")
         self.cmb_transform.grid(row=0, column=4, sticky="w", padx=6)
 
-        ttk.Label(ed, text="Stała:").grid(row=1, column=3, sticky="e", padx=6)
+        ttk.Label(ed, text="Stała / Format:").grid(row=1, column=3, sticky="e", padx=6)
         self.ent_const = ttk.Entry(ed, textvariable=self.var_const, width=30); self.ent_const.grid(row=1, column=4, sticky="w", padx=6)
 
         ttk.Button(ed, text="Zastosuj (aktualizuj wybrany)", command=self.apply_edit)\
@@ -664,10 +700,11 @@ class App(tk.Tk):
         ttk.Button(btns, text="Dodaj z kolumny…", command=self.add_from_column).pack(side="left", padx=8)
         ttk.Button(btns, text="Dodaj wiersz", command=self.add_blank_row).pack(side="left", padx=8)
 
-        help_txt = ("Wybierz wiersz, edytuj pola poniżej i kliknij „Zastosuj”. "
+        help_txt = ("Wybierz wiersz, edytuj pola i kliknij „Zastosuj”. "
                     "„Dodaj z kolumny…” tworzy wiersz mapujący istniejącą kolumnę. "
-                    "„Dodaj wiersz” tworzy pusty wpis z transformacją 'constant' – uzupełnij pole „Stała”. "
-                    "Brak wartości ze źródła daje „ - ” (nie dotyczy 'constant').")
+                    "„Dodaj wiersz” tworzy pusty wpis z transformacją 'constant'. "
+                    "Transform 'format' używa 'sources' z presetu oraz szablonu w polu „Stała / Format”, "
+                    "np. '{xcoord}, {ycoord}'. Brak wartości → ' - ' (poza 'constant').")
         ttk.Label(parent, text=help_txt, foreground="#555", wraplength=900, justify="left")\
             .pack(fill="x", padx=12, pady=(0,8))
 
@@ -680,7 +717,7 @@ class App(tk.Tk):
         self.var_map = tk.BooleanVar(value=True);   self.var_map_h = tk.DoubleVar(value=6.0)
         self.var_break = tk.BooleanVar(value=True); self.var_comma = tk.BooleanVar(value=True)
 
-        # Marginesy [cm] — DOMYŚLNE wg wymagań
+        # Marginesy [cm] — DOMYŚLNE
         self.var_marg_l = tk.DoubleVar(value=2.0)
         self.var_marg_r = tk.DoubleVar(value=6.5)
         self.var_marg_t = tk.DoubleVar(value=3.9)
@@ -733,7 +770,7 @@ class App(tk.Tk):
         ttk.Radiobutton(lay, text="B — tabela po lewej + scalona kolumna na zdjęcie po prawej; mapa pod spodem", variable=self.var_layout, value="B")\
             .grid(row=1, column=0, sticky="w", padx=8, pady=6)
 
-        # --- CZCIONKA — DOMYŚLNE wg wymagań ---
+        # --- CZCIONKA ---
         fontf = ttk.LabelFrame(parent, text="Czcionka")
         fontf.pack(fill="x", padx=8, pady=(10,8))
         ttk.Label(fontf, text="Rodzina:").grid(row=0, column=0, sticky="e", padx=8, pady=6)
@@ -756,7 +793,7 @@ class App(tk.Tk):
         ttk.Label(colf, text="zdjęcie:").grid(row=1, column=4, sticky="e", padx=8, pady=6)
         ttk.Entry(colf, textvariable=self.var_B_photo_cm, width=6).grid(row=1, column=5, sticky="w", padx=4, pady=6)
 
-        # --- ZDJĘCIA: kompresja i skala — DOMYŚLNE wg wymagań ---
+        # --- ZDJĘCIA: kompresja i skala ---
         photof = ttk.LabelFrame(parent, text="Zdjęcia — kompresja i skala")
         photof.pack(fill="x", padx=8, pady=(10,8))
         ttk.Label(photof, text="Jakość JPG (1–95):").grid(row=0, column=0, sticky="e", padx=8, pady=6)
@@ -778,7 +815,12 @@ class App(tk.Tk):
             self._placeholder_in_extra("Wybierz plik Excel, aby rozpocząć."); return
         if not self.mapping:
             self._placeholder_in_extra("Wczytaj preset, aby zobaczyć kolumny pozostające poza mapą."); return
-        mapped_sources = {m["source"] for m in self.mapping if m.get("source")}
+        mapped_sources = set()
+        for m in self.mapping:
+            if m.get("source"):
+                mapped_sources.add(m["source"])
+            for s in m.get("sources", []):
+                mapped_sources.add(s)
         any_added = False
         for c in self.df.columns:
             if c in mapped_sources: continue
@@ -804,7 +846,11 @@ class App(tk.Tk):
         new_mapping = []
         for item in data.get("mapping", []):
             m = dict(item)
+            # resolve single source (if any)
             m["source"] = resolve_source_name(m.get("source",""), self.df.columns, aliases)
+            # resolve multi-sources (if any)
+            if isinstance(m.get("sources", None), list):
+                m["sources"] = [resolve_source_name(s, self.df.columns, aliases) for s in m["sources"]]
             new_mapping.append(m)
         self.mapping = new_mapping
         opts = data.get("options", {})
@@ -863,9 +909,13 @@ class App(tk.Tk):
     def refresh_tree(self):
         self.tree.delete(*self.tree.get_children())
         for i, m in enumerate(self.mapping):
+            if m.get("sources"):
+                src_disp = ", ".join([s for s in m.get("sources", []) if s])
+            else:
+                src_disp = m.get("source","")
             self.tree.insert("", "end", iid=str(i),
                 values=(i, "✓" if m.get("enabled",False) else "–",
-                        m.get("label",""), m.get("source",""),
+                        m.get("label",""), src_disp,
                         m.get("transform","identity"), m.get("const","")))
 
     def on_select_row(self, *_):
@@ -873,20 +923,29 @@ class App(tk.Tk):
         if not sel: return
         i = int(sel[0]); m = self.mapping[i]
         self.var_on.set(bool(m.get("enabled",False)))
-        self.var_label.set(m.get("label","")); self.var_source.set(m.get("source",""))
+        self.var_label.set(m.get("label",""))
+        # przy multi-sources nie zmieniamy comboboxa — wyświetlamy pierwszy jako podpowiedź
+        src0 = (m.get("sources", []) or [m.get("source","")])[0]
+        self.var_source.set(src0)
         self.var_transform.set(m.get("transform","identity")); self.var_const.set(m.get("const",""))
 
     def apply_edit(self):
         sel = self.tree.selection()
         if not sel: return
         i = int(sel[0])
-        self.mapping[i] = {
+        # zachowaj ewentualne źródła multi, jeśli transform pozostaje 'format'
+        old_sources = self.mapping[i].get("sources", [])
+        new_tf = self.var_transform.get().strip()
+        new_map = {
             "enabled": bool(self.var_on.get()),
             "label": self.var_label.get().strip(),
             "source": self.var_source.get().strip(),
-            "transform": self.var_transform.get().strip(),
+            "transform": new_tf,
             "const": self.var_const.get(),
         }
+        if new_tf == "format":
+            new_map["sources"] = old_sources  # edytujemy szablon/etykietę, źródła z presetu zostają
+        self.mapping[i] = new_map
         self.refresh_tree(); self.tree.selection_set(str(i))
         self.rebuild_extra_columns()
 
@@ -908,12 +967,12 @@ class App(tk.Tk):
         src = self.var_source.get().strip()
         if not src:
             messagebox.showinfo("Info","Wybierz źródło w polu 'Źródło', potem kliknij 'Dodaj z kolumny…'."); return
-        self.mapping.append({"enabled": False, "label": src, "source": src, "transform":"identity", "const":""})
+        self.mapping.append({"enabled": False, "label": src, "source": src, "transform":"identity", "const":"", "sources":[]})
         self.refresh_tree(); self.tree.selection_set(str(len(self.mapping)-1))
         self.rebuild_extra_columns()
 
     def add_blank_row(self):
-        self.mapping.append({"enabled": True, "label": "", "source": "", "transform":"constant", "const":""})
+        self.mapping.append({"enabled": True, "label": "", "source": "", "transform":"constant", "const":"", "sources":[]})
         self.refresh_tree(); self.tree.selection_set(str(len(self.mapping)-1))
 
     def run(self):

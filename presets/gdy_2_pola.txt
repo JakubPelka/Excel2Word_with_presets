@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "label": "Koordinater",
+  "sources": ["xcoord", "ycoord"],
+  "transform": "format",
+  "const": "{xcoord}, {ycoord}"
+}
