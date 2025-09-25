@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-Excel → mikro-tabele w Wordzie (GUI, Tkinter) z mapowaniem, transformacjami, presetami JSON i układem A/B.
-Aktualizacja:
-- Układ B: jedna tabela 3‑kolumnowa (etykieta, wartość, zdjęcie-scala).
-- Spójne obramowanie: zewnętrzne i wewnętrzne linie mają ten sam styl (jak w Table Grid).
+Excel → mikro‑tabele w Wordzie (GUI, Tkinter) z presetami, układem A/B,
+auto‑zdjęciami (match po kolumnie) + szerokościami kolumn + czcionką + LOG + KOMPRESJA
++ podział ramki zdjęcia na 2 pola
++ **NOWOŚĆ**: automatyczne foto #2 ze **sufiksami: _2, -2, (2),  (2) ze spacją**
++ **NOWOŚĆ**: zdjęcia centrowane w obrębie ramki (poziomo; pionowo – standard Worda)
+
+Autor: Ty + ChatGPT
 """
 
 # ---------- BOOTSTRAP PIP ----------
@@ -35,22 +38,48 @@ def _ensure(pkg, module=None):
         _pip_install(pkg)
 
 _ensure("pandas","pandas"); _ensure("python-docx","docx"); _ensure("openpyxl","openpyxl"); _ensure_min("xlrd","xlrd","2.0.1")
+_ensure("Pillow","PIL")
 
 # ---------- IMPORTY ----------
-import os, json
+import os, json, logging, traceback, io
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import pandas as pd
 from pathlib import Path
 from docx import Document
 from docx.shared import Cm, Pt
-from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from datetime import date, datetime
+from PIL import Image, ImageOps
 
 EMU_PER_CM = 360000  # Word EMU -> cm
+
+# ---------- LOGGING ----------
+def setup_logger(out_dir: str):
+    out_dir = out_dir or os.getcwd()
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+    except Exception:
+        pass
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = os.path.join(out_dir, f"excel2word_{ts}.log")
+    logger = logging.getLogger(f"e2w_{ts}")
+    logger.setLevel(logging.DEBUG)
+    fh = logging.FileHandler(log_path, encoding="utf-8")
+    fh.setLevel(logging.DEBUG)
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+    sh = logging.StreamHandler()
+    sh.setLevel(logging.WARNING)
+    sh.setFormatter(fmt)
+    logger.addHandler(sh)
+    logger.log_path = log_path
+    logger.debug("=== START SESSION ===")
+    return logger
 
 # ---------- TRANSFORMACJE ----------
 def _is_missing(v):
@@ -83,7 +112,6 @@ def tf_date_only(val, row, comma=False):
     except Exception:
         return str(val)
 def tf_bool_ja_nej(val, row, comma=False):
-    """1/0, 1.0/0.0, ja/nej, yes/no, true/false → 'Ja'/'Nej'; nieznane → '' (później ' - ')."""
     if _is_missing(val): return ""
     s = str(val).strip().lower()
     try:
@@ -112,15 +140,16 @@ def _shade_cell(cell, fill_hex="F2F2F2"):
     shd = OxmlElement("w:shd")
     shd.set(qn("w:val"), "clear"); shd.set(qn("w:color"), "auto"); shd.set(qn("w:fill"), fill_hex)
     tcPr.append(shd)
-def _set_cell_text(cell, text, bold=False, size_pt=10):
+def _set_cell_text(cell, text, bold=False, size_pt=None, font_name=None):
     cell.text = "" if text is None else str(text)
     for p in cell.paragraphs:
         for r in p.runs:
-            r.font.bold = bold; r.font.size = Pt(size_pt)
+            if font_name: r.font.name = font_name
+            if size_pt:   r.font.size = Pt(size_pt)
+            r.font.bold = bold
     if cell.paragraphs: cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
 
 def _set_tbl_borders(table, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4, color="000000"):
-    """Ustaw grubość (w ósemkach punktu) dla krawędzi tabeli; 0 → brak linii (val='nil')."""
     tbl = table._element  # CT_Tbl
     tblPr = tbl.tblPr
     if tblPr is None:
@@ -140,16 +169,154 @@ def _set_tbl_borders(table, top=4, left=4, bottom=4, right=4, insideH=4, insideV
     set_edge("top", top); set_edge("left", left); set_edge("bottom", bottom); set_edge("right", right)
     set_edge("insideH", insideH); set_edge("insideV", insideV)
 
+# ---------- OBRAZY ----------
+def _normalize_slug_candidates(val):
+    cands = []
+    if val is None: return cands
+    s = str(val).strip()
+    if s == "": return cands
+    cands.append(s)
+    cands.append(s.replace(" ", "_"))
+    try:
+        f = float(s.replace(",", "."))
+        if f.is_integer():
+            cands.append(str(int(f)))
+    except Exception:
+        pass
+    cands.append(s.strip(" ._"))
+    dedup = []
+    for x in cands:
+        if x and x not in dedup:
+            dedup.append(x)
+    return dedup
+
+def find_image_for(id_value, images_dir, logger=None):
+    """Foto #1: bazowy plik odpowiadający ID."""
+    if logger: logger.debug(f"[IMG] images_dir={images_dir!r}, id_value={id_value!r}")
+    if not images_dir or not os.path.isdir(images_dir) or _is_missing(id_value):
+        if logger: logger.debug("[IMG] brak folderu lub id")
+        return None
+    cands = _normalize_slug_candidates(id_value)
+    if logger: logger.debug(f"[IMG] candidates={cands}")
+    for base in cands:
+        for ext in ("jpg","jpeg","png","JPG","JPEG","PNG"):
+            p = os.path.join(images_dir, f"{base}.{ext}")
+            if os.path.exists(p):
+                if logger: logger.debug(f"[IMG] FOUND {p}")
+                return p
+    try:
+        slug_set = {x.lower() for x in cands}
+        for fn in os.listdir(images_dir):
+            base, ext = os.path.splitext(fn)
+            if ext.lower() in (".jpg",".jpeg",".png") and base.lower() in slug_set:
+                p = os.path.join(images_dir, fn)
+                if logger: logger.debug(f"[IMG] FOUND (scan) {p}")
+                return p
+    except Exception as e:
+        if logger: logger.warning(f"[IMG] scan error: {e}")
+    if logger: logger.debug("[IMG] NOT FOUND")
+    return None
+
+def find_image_for_second(id_value, images_dir, logger=None, suffixes=None):
+    """
+    Foto #2: warianty <base><suffix>.*
+    Domyślne sufiksy: "_2", "-2", "(2)", " (2)" (ze spacją).
+    Przykłady: "Lokal 2_2.jpg", "Lokal 2-2.jpg", "Lokal 2(2).jpg", "Lokal 2 (2).jpg"
+    oraz analogiczne z podkreśleniem po bazie: "Lokal_2_2.jpg", "Lokal_2-2.jpg", "Lokal_2(2).jpg", "Lokal_2 (2).jpg".
+    """
+    if suffixes is None:
+        suffixes = ("_2", "-2", "(2)", " (2)")
+    if logger: logger.debug(f"[IMG2] images_dir={images_dir!r}, id_value={id_value!r}, suffixes={suffixes}")
+    if not images_dir or not os.path.isdir(images_dir) or _is_missing(id_value):
+        if logger: logger.debug("[IMG2] brak folderu lub id")
+        return None
+    bases = _normalize_slug_candidates(id_value)  # np. ["Lokal 2","Lokal_2","2"]
+    cands = []
+    for b in bases:
+        for sfx in suffixes:
+            cands.append(b + sfx)              # "Lokal 2_2", "Lokal 2-2", "Lokal 2(2)", "Lokal 2 (2)"
+    if logger: logger.debug(f"[IMG2] candidates={cands}")
+    # najpierw bez skanu — bezpośrednie ścieżki
+    for base in cands:
+        for ext in ("jpg","jpeg","png","JPG","JPEG","PNG"):
+            p = os.path.join(images_dir, f"{base}.{ext}")
+            if os.path.exists(p):
+                if logger: logger.debug(f"[IMG2] FOUND {p}")
+                return p
+    # skan folderu — case-insensitive
+    try:
+        want = {x.lower() for x in cands}
+        for fn in os.listdir(images_dir):
+            base, ext = os.path.splitext(fn)
+            if ext.lower() in (".jpg",".jpeg",".png") and base.lower() in want:
+                p = os.path.join(images_dir, fn)
+                if logger: logger.debug(f"[IMG2] FOUND (scan) {p}")
+                return p
+    except Exception as e:
+        if logger: logger.warning(f"[IMG2] scan error: {e}")
+    if logger: logger.debug("[IMG2] NOT FOUND")
+    return None
+
+def _cm_to_px(cm, dpi):
+    return int(round(cm * dpi / 2.54))
+
+def insert_picture_in_cell(cell, image_path, frame_w_cm, frame_h_cm=None, logger=None,
+                           jpg_quality=82, export_dpi=150, no_upscale=True):
+    """Skaluje obraz do ramki, re‑koduje do JPEG (bez EXIF), wstawia do komórki i centruje poziomo."""
+    if not image_path or not os.path.exists(image_path):
+        if logger: logger.debug(f"[IMG] no image to insert: {image_path}")
+        return False
+    try:
+        with Image.open(image_path) as im:
+            im = ImageOps.exif_transpose(im).convert("RGB")
+            src_w, src_h = im.size
+
+            tgt_w_px = _cm_to_px(frame_w_cm, export_dpi)
+            tgt_h_px = _cm_to_px(frame_h_cm, export_dpi) if frame_h_cm else 10**9
+
+            scale = min(tgt_w_px / src_w, tgt_h_px / src_h)
+            if no_upscale:
+                scale = min(1.0, scale)
+            new_w = max(1, int(round(src_w * scale)))
+            new_h = max(1, int(round(src_h * scale)))
+
+            if (new_w, new_h) != (src_w, src_h):
+                im = im.resize((new_w, new_h), Image.LANCZOS)
+
+            bio = io.BytesIO()
+            im.save(bio, format="JPEG", quality=int(jpg_quality), optimize=True,
+                    progressive=True, subsampling=2)
+            bio.seek(0)
+
+            new_w_cm = new_w / export_dpi * 2.54
+            target_w_cm = min(frame_w_cm, new_w_cm)
+
+        # centrowanie w komórce
+        try:
+            cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+        except Exception:
+            pass
+        p = cell.add_paragraph("")
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = p.add_run()
+        run.add_picture(bio, width=Cm(max(0.1, target_w_cm)))
+        return True
+    except Exception as e:
+        if logger:
+            logger.error(f"[IMG] insert failed for {image_path}: {e}")
+            logger.debug(traceback.format_exc())
+        return False
+
 # ---------- EXCEL ----------
 def read_excel_any(path):
     ext = os.path.splitext(path.lower())[1]
     if ext == ".xls": return pd.read_excel(path, engine="xlrd")
     return pd.read_excel(path)
 
-# ---------- PRESETY: dopasowanie aliasów ----------
+# ---------- PRESETY / ALIASY ----------
 def _norm(s: str) -> str:
     return "".join(ch for ch in str(s).lower() if ch.isalnum())
-def resolve_source_name(wanted: str, df_columns, aliases: dict) -> str:
+def resolve_source_name(wanted: str, df_columns, aliases: dict):
     cols = list(map(str, df_columns))
     by_norm = {_norm(c): c for c in cols}
     candidates = [wanted] + list(aliases.get(wanted, [])) if wanted else []
@@ -162,39 +329,64 @@ def resolve_source_name(wanted: str, df_columns, aliases: dict) -> str:
 
 # ---------- GENERACJA DOCX ----------
 def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
-               add_photo=True, photo_h_cm=6.0,
+               add_photo=True, photo_h_cm=6.0, photo_split=False,
                add_map=True, map_h_cm=6.0,
                page_break=False, use_decimal_comma=True,
-               margin_left_cm=2.0, margin_right_cm=6.5,
-               margin_top_cm=3.9, margin_bottom_cm=3.0,
-               layout_mode="A"):
-    """
-    layout_mode: 'A' — tabela → (foto?) → (mapa?)
-                 'B' — jedna tabela 3 kol.: [etykieta][wartość][foto]; mapa pod spodem.
-                 Jeśli add_photo=False → zachowuje się jak 'A'.
-    """
+               margin_left_cm=2.0, margin_right_cm=2.0,
+               margin_top_cm=2.0, margin_bottom_cm=2.0,
+               layout_mode="A",
+               images_dir=None, image_id_column="objektnummer",
+               base_font_name="Calibri", base_font_size_pt=10,
+               a_label_cm=6.0,
+               b_label_cm=0.0, b_value_cm=0.0, b_photo_cm=0.0,
+               jpg_quality=82, export_dpi=150, no_upscale=True,
+               logger=None):
+    if logger:
+        logger.debug(f"[DOCX] start build_docx out_name={out_name}, layout={layout_mode}, "
+                     f"photo={add_photo}/{photo_h_cm}cm split={photo_split}, map={add_map}/{map_h_cm}cm, "
+                     f"page_break={page_break}, comma={use_decimal_comma}, "
+                     f"margins=({margin_left_cm},{margin_right_cm},{margin_top_cm},{margin_bottom_cm})cm, "
+                     f"font=({base_font_name},{base_font_size_pt}pt), "
+                     f"A_label={a_label_cm}cm, B={b_label_cm},{b_value_cm},{b_photo_cm}cm, "
+                     f"images_dir={images_dir}, image_id_column={image_id_column}, "
+                     f"jpg_quality={jpg_quality}, export_dpi={export_dpi}, no_upscale={no_upscale}")
     doc = Document()
+    try:
+        style = doc.styles["Normal"]
+        if base_font_name: style.font.name = base_font_name
+        if base_font_size_pt: style.font.size = Pt(base_font_size_pt)
+    except Exception as e:
+        if logger: logger.warning(f"[DOCX] style set failed: {e}")
+
     section = doc.sections[0]
-    # Marginesy
     section.left_margin   = Cm(float(margin_left_cm))
     section.right_margin  = Cm(float(margin_right_cm))
     section.top_margin    = Cm(float(margin_top_cm))
     section.bottom_margin = Cm(float(margin_bottom_cm))
 
-    # Szerokość treści po marginesach (w cm)
     content_w_cm = (section.page_width - section.left_margin - section.right_margin) / EMU_PER_CM
 
     # Dołącz pozostałe kolumny jako identity
     for col_name in extra_cols:
         mapping_rows.append({"enabled": True, "label": col_name, "source": col_name, "transform": "identity", "const": ""})
 
-    for _, cur_row in df.iterrows():
+    for ridx, (_, cur_row) in enumerate(df.iterrows(), start=1):
+        if logger: logger.debug(f"[ROW] #{ridx}")
         enabled_rows = [m for m in mapping_rows if m.get("enabled", False)]
+        img_path = None; img2_path = None
+        if images_dir and image_id_column:
+            id_val = cur_row.get(image_id_column, None)
+            img_path = find_image_for(id_val, images_dir, logger=logger)
+            img2_path = find_image_for_second(id_val, images_dir, logger=logger)  # ma suffixes domyślne
+
         if layout_mode == "B" and add_photo and enabled_rows:
-            right_photo_cm = max(5.0, min(9.0, content_w_cm * 0.35))
-            left_outer_cm  = max(6.0, content_w_cm - right_photo_cm)
-            label_cm = max(3.5, min(7.0, left_outer_cm * 0.45))
-            value_cm = max(3.5, left_outer_cm - label_cm)
+            # szerokości B (0=auto)
+            photo_cm = b_photo_cm if (b_photo_cm and b_photo_cm > 0) else max(5.0, min(9.0, content_w_cm * 0.35))
+            left_cm  = max(6.0, content_w_cm - photo_cm)
+            label_cm = b_label_cm if (b_label_cm and b_label_cm > 0) else max(3.5, min(7.0, left_cm * 0.45))
+            value_cm = b_value_cm if (b_value_cm and b_value_cm > 0) else max(3.5, left_cm - label_cm)
+            if b_label_cm > 0 and b_value_cm > 0 and (b_label_cm + b_value_cm) > left_cm:
+                value_cm = max(1.0, left_cm - b_label_cm)
 
             t = doc.add_table(rows=len(enabled_rows), cols=3)
             t.style = "Table Grid"; t.autofit = False; t.alignment = WD_TABLE_ALIGNMENT.LEFT
@@ -207,35 +399,59 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
                 val = tf(raw, cur_row, use_decimal_comma, const_val=const_val) if tf_key=="constant" else tf(raw, cur_row, use_decimal_comma)
                 if tf_key != "constant" and (val is None or (isinstance(val,str) and val.strip()=="")):
                     val = " - "
-                _set_cell_text(t.cell(i,0), lbl, bold=True); _shade_cell(t.cell(i,0), "F2F2F2")
-                _set_cell_text(t.cell(i,1), val)
+                _set_cell_text(t.cell(i,0), lbl, bold=True, size_pt=base_font_size_pt, font_name=base_font_name); _shade_cell(t.cell(i,0), "F2F2F2")
+                _set_cell_text(t.cell(i,1), val, bold=False, size_pt=base_font_size_pt, font_name=base_font_name)
 
             for r in t.rows:
-                r.cells[0].width = Cm(label_cm); r.cells[1].width = Cm(value_cm); r.cells[2].width = Cm(right_photo_cm)
+                r.cells[0].width = Cm(label_cm); r.cells[1].width = Cm(value_cm); r.cells[2].width = Cm(photo_cm)
 
             merged = t.cell(0,2)
             for i in range(1, len(enabled_rows)):
                 merged = merged.merge(t.cell(i,2))
             p = merged.paragraphs[0] if merged.paragraphs else merged.add_paragraph("")
-            p.add_run("Representativt foto:").font.size = Pt(10)
+            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            run = p.add_run("Representativt foto:")
+            if base_font_name: run.font.name = base_font_name
+            if base_font_size_pt: run.font.size = Pt(base_font_size_pt)
 
-            # SPÓJNE krawędzie: zewnętrzne i wewnętrzne 4/8 pt
+            # zdjęcia
+            if photo_split:
+                inner = merged.add_table(rows=1, cols=2)
+                inner.style = "Table Grid"; inner.autofit = False
+                inner.rows[0].height = Cm(photo_h_cm)
+                inner.cell(0,0).width = Cm(photo_cm/2.0)
+                inner.cell(0,1).width = Cm(photo_cm/2.0)
+                if img_path:
+                    insert_picture_in_cell(inner.cell(0,0), img_path, frame_w_cm=photo_cm/2.0, frame_h_cm=photo_h_cm,
+                                           logger=logger, jpg_quality=jpg_quality, export_dpi=export_dpi, no_upscale=no_upscale)
+                if img2_path:
+                    insert_picture_in_cell(inner.cell(0,1), img2_path, frame_w_cm=photo_cm/2.0, frame_h_cm=photo_h_cm,
+                                           logger=logger, jpg_quality=jpg_quality, export_dpi=export_dpi, no_upscale=no_upscale)
+                _set_tbl_borders(inner, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4)
+            else:
+                if img_path:
+                    insert_picture_in_cell(merged, img_path, frame_w_cm=photo_cm, frame_h_cm=None,
+                                           logger=logger, jpg_quality=jpg_quality, export_dpi=export_dpi, no_upscale=no_upscale)
+
             _set_tbl_borders(t, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4)
 
             doc.add_paragraph("")
             if add_map:
                 p2 = doc.add_paragraph("Kartbild av objektet:")
-                if p2.runs: p2.runs[0].font.size = Pt(10)
+                if p2.runs:
+                    if base_font_name: p2.runs[0].font.name = base_font_name
+                    if base_font_size_pt: p2.runs[0].font.size = Pt(base_font_size_pt)
                 mp = doc.add_table(rows=1, cols=1); mp.style = "Table Grid"; mp.autofit = False
                 mp.rows[0].height = Cm(map_h_cm); mp.cell(0, 0).width = Cm(content_w_cm)
-                _set_cell_text(mp.cell(0, 0), " ")
+                _set_cell_text(mp.cell(0, 0), " ", size_pt=base_font_size_pt, font_name=base_font_name)
                 _set_tbl_borders(mp, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4)
                 doc.add_paragraph("")
 
         else:
             # Układ A
-            left_w_cm  = 6.0
-            right_w_cm = max(6.0, content_w_cm - left_w_cm)
+            label_cm = max(1.0, min(content_w_cm-1.0, a_label_cm if a_label_cm else 6.0))
+            value_cm = max(1.0, content_w_cm - label_cm)
+
             t = doc.add_table(rows=0, cols=2)
             t.alignment = WD_TABLE_ALIGNMENT.LEFT; t.style = "Table Grid"; t.autofit = False
             for item in enabled_rows or mapping_rows:
@@ -248,28 +464,49 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
                 if tf_key != "constant" and (val is None or (isinstance(val,str) and val.strip()=="")):
                     val = " - "
                 cells = t.add_row().cells
-                _set_cell_text(cells[0], lbl, bold=True); _shade_cell(cells[0], "F2F2F2")
-                _set_cell_text(cells[1], val)
+                _set_cell_text(cells[0], lbl, bold=True, size_pt=base_font_size_pt, font_name=base_font_name); _shade_cell(cells[0], "F2F2F2")
+                _set_cell_text(cells[1], val, bold=False, size_pt=base_font_size_pt, font_name=base_font_name)
             for r in t.rows:
-                r.cells[0].width = Cm(left_w_cm); r.cells[1].width = Cm(right_w_cm)
+                r.cells[0].width = Cm(label_cm); r.cells[1].width = Cm(value_cm)
 
             _set_tbl_borders(t, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4)
 
             doc.add_paragraph("")
             if add_photo:
                 p = doc.add_paragraph("Representativt foto:")
-                if p.runs: p.runs[0].font.size = Pt(10)
-                ph = doc.add_table(rows=1, cols=1); ph.style = "Table Grid"; ph.autofit = False
-                ph.rows[0].height = Cm(photo_h_cm); ph.cell(0, 0).width = Cm(content_w_cm)
-                _set_cell_text(ph.cell(0, 0), " ")
-                _set_tbl_borders(ph, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4)
+                if p.runs:
+                    if base_font_name: p.runs[0].font.name = base_font_name
+                    if base_font_size_pt: p.runs[0].font.size = Pt(base_font_size_pt)
+                if photo_split:
+                    ph = doc.add_table(rows=1, cols=2); ph.style = "Table Grid"; ph.autofit = False
+                    ph.rows[0].height = Cm(photo_h_cm)
+                    ph.cell(0, 0).width = Cm(content_w_cm/2.0)
+                    ph.cell(0, 1).width = Cm(content_w_cm/2.0)
+                    if img_path:
+                        insert_picture_in_cell(ph.cell(0,0), img_path, frame_w_cm=content_w_cm/2.0, frame_h_cm=photo_h_cm,
+                                               logger=logger, jpg_quality=jpg_quality, export_dpi=export_dpi, no_upscale=no_upscale)
+                    if img2_path:
+                        insert_picture_in_cell(ph.cell(0,1), img2_path, frame_w_cm=content_w_cm/2.0, frame_h_cm=photo_h_cm,
+                                               logger=logger, jpg_quality=jpg_quality, export_dpi=export_dpi, no_upscale=no_upscale)
+                    _set_tbl_borders(ph, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4)
+                else:
+                    ph = doc.add_table(rows=1, cols=1); ph.style = "Table Grid"; ph.autofit = False
+                    ph.rows[0].height = Cm(photo_h_cm); ph.cell(0, 0).width = Cm(content_w_cm)
+                    if img_path:
+                        insert_picture_in_cell(ph.cell(0,0), img_path, frame_w_cm=content_w_cm, frame_h_cm=photo_h_cm,
+                                               logger=logger, jpg_quality=jpg_quality, export_dpi=export_dpi, no_upscale=no_upscale)
+                    else:
+                        _set_cell_text(ph.cell(0, 0), " ", size_pt=base_font_size_pt, font_name=base_font_name)
+                    _set_tbl_borders(ph, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4)
                 doc.add_paragraph("")
             if add_map:
                 p2 = doc.add_paragraph("Kartbild av objektet:")
-                if p2.runs: p2.runs[0].font.size = Pt(10)
+                if p2.runs:
+                    if base_font_name: p2.runs[0].font.name = base_font_name
+                    if base_font_size_pt: p2.runs[0].font.size = Pt(base_font_size_pt)
                 mp = doc.add_table(rows=1, cols=1); mp.style = "Table Grid"; mp.autofit = False
                 mp.rows[0].height = Cm(map_h_cm); mp.cell(0, 0).width = Cm(content_w_cm)
-                _set_cell_text(mp.cell(0, 0), " ")
+                _set_cell_text(mp.cell(0, 0), " ", size_pt=base_font_size_pt, font_name=base_font_name)
                 _set_tbl_borders(mp, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4)
                 doc.add_paragraph("")
 
@@ -277,18 +514,37 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
             doc.add_page_break()
 
     out_file = os.path.join(out_path, out_name if out_name.lower().endswith(".docx") else out_name + ".docx")
-    doc.save(out_file); return out_file
+    doc.save(out_file)
+    if logger: logger.debug(f"[DOCX] saved: {out_file}")
+    return out_file
 
 # ---------- GUI ----------
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Excel → Mikro-tabele Word (presety) — układ A/B")
-        self.geometry("1050x900"); self.resizable(True, True)
+        self.title("Excel → Mikro‑tabele Word — presety, układ A/B, 2‑zdjęcia (_2/-2/(2)), foto‑match, kolumny, czcionka, log, kompresja")
+        self.geometry("1180x980"); self.resizable(True, True)
         self.df = None
         self.mapping = []
-        self.extra_vars = {}   # nazwa kolumny -> tk.BooleanVar()
+        self.extra_vars = {}
         self.preset_label_var = tk.StringVar(value="(brak)")
+        # zdjęcia
+        self.var_img_dir = tk.StringVar(value="")
+        self.var_img_col = tk.StringVar(value="objektnummer")
+        # foto‑kompresja
+        self.var_jpg_quality = tk.IntVar(value=82)
+        self.var_export_dpi = tk.IntVar(value=150)
+        self.var_no_upscale = tk.BooleanVar(value=True)
+        # foto: podział na 2 pola
+        self.var_photo_split = tk.BooleanVar(value=True)
+        # czcionka
+        self.var_font_name = tk.StringVar(value="Calibri")
+        self.var_font_size = tk.DoubleVar(value=10.0)
+        # szerokości kolumn
+        self.var_A_label_cm = tk.DoubleVar(value=6.0)
+        self.var_B_label_cm = tk.DoubleVar(value=0.0)   # 0 = auto
+        self.var_B_value_cm = tk.DoubleVar(value=0.0)   # 0 = auto
+        self.var_B_photo_cm = tk.DoubleVar(value=0.0)   # 0 = auto
         self._build_ui()
 
     def _build_ui(self):
@@ -303,13 +559,22 @@ class App(tk.Tk):
         ttk.Label(top, text="Nazwa pliku .docx:").grid(row=2, column=0, sticky="w", **pad)
         self.name_entry = ttk.Entry(top, width=40); self.name_entry.insert(0, "wynik.docx"); self.name_entry.grid(row=2, column=1, sticky="w", **pad)
 
-        btn_row = ttk.Frame(top); btn_row.grid(row=3, column=0, columnspan=3, sticky="we", padx=8, pady=(2,8))
+        # Wiersz: zdjęcia
+        ttk.Label(top, text="Folder zdjęć (opcjonalnie):").grid(row=3, column=0, sticky="w", **pad)
+        self.img_entry = ttk.Entry(top, textvariable=self.var_img_dir, width=80); self.img_entry.grid(row=3, column=1, sticky="we", **pad)
+        ttk.Button(top, text="Wybierz…", command=self.pick_imgdir).grid(row=3, column=2, **pad)
+
+        ttk.Label(top, text="Kolumna dopasowania zdjęć:").grid(row=4, column=0, sticky="w", **pad)
+        self.cmb_img_col = ttk.Combobox(top, textvariable=self.var_img_col, width=40, values=[], state="readonly")
+        self.cmb_img_col.grid(row=4, column=1, sticky="w", **pad)
+
+        btn_row = ttk.Frame(top); btn_row.grid(row=5, column=0, columnspan=3, sticky="we", padx=8, pady=(2,8))
         ttk.Button(btn_row, text="Wczytaj preset…", command=self.load_preset_dialog).pack(side="left")
         ttk.Label(btn_row, text="Preset:").pack(side="left", padx=(16,4))
         ttk.Label(btn_row, textvariable=self.preset_label_var, foreground="#555").pack(side="left")
 
-        nb = ttk.Notebook(top); nb.grid(row=4, column=0, columnspan=3, sticky="nsew", padx=8, pady=8)
-        top.rowconfigure(4, weight=1); top.columnconfigure(1, weight=1)
+        nb = ttk.Notebook(top); nb.grid(row=6, column=0, columnspan=3, sticky="nsew", padx=8, pady=8)
+        top.rowconfigure(6, weight=1); top.columnconfigure(1, weight=1)
 
         # --- Mapowanie
         self.tab_map = ttk.Frame(nb); nb.add(self.tab_map, text="Mapowanie pól")
@@ -325,7 +590,7 @@ class App(tk.Tk):
         self._build_opt_tab(self.tab_opt)
 
         ttk.Button(top, text="Generuj DOCX", command=self.run)\
-            .grid(row=5, column=0, columnspan=3, sticky="we", padx=8, pady=8)
+            .grid(row=7, column=0, columnspan=3, sticky="we", padx=8, pady=8)
 
     def _build_map_tab(self, parent):
         cols = ("order","#on","label","source","transform","const")
@@ -391,14 +656,17 @@ class App(tk.Tk):
 
         # Marginesy [cm]
         self.var_marg_l = tk.DoubleVar(value=2.0)
-        self.var_marg_r = tk.DoubleVar(value=6.5)
-        self.var_marg_t = tk.DoubleVar(value=3.9)
-        self.var_marg_b = tk.DoubleVar(value=3.0)
+        self.var_marg_r = tk.DoubleVar(value=2.0)
+        self.var_marg_t = tk.DoubleVar(value=2.0)
+        self.var_marg_b = tk.DoubleVar(value=2.0)
 
         ttk.Checkbutton(opt, text="Dodaj ramkę na zdjęcie po każdym rekordzie", variable=self.var_photo)\
             .grid(row=0, column=0, sticky="w", padx=8, pady=4)
         ttk.Label(opt, text="Wysokość [cm]:").grid(row=0, column=1, sticky="e")
         ttk.Entry(opt, textvariable=self.var_photo_h, width=6).grid(row=0, column=2, sticky="w", padx=6)
+
+        ttk.Checkbutton(opt, text="Dziel ramkę zdjęcia na 2 pola (2 zdjęcia obok siebie)", variable=self.var_photo_split)\
+            .grid(row=0, column=3, sticky="w", padx=12, pady=4)
 
         ttk.Checkbutton(opt, text="Dodaj ramkę na mapę (po zdjęciu/tabeli)", variable=self.var_map)\
             .grid(row=1, column=0, sticky="w", padx=8, pady=4)
@@ -420,8 +688,8 @@ class App(tk.Tk):
         # --- Sortowanie ---
         sortf = ttk.LabelFrame(parent, text="Sortowanie")
         sortf.pack(fill="x", padx=8, pady=(10,8))
-        self.var_sort_col = tk.StringVar(value="")        # pusta = bez sortowania
-        self.var_sort_asc = tk.BooleanVar(value=True)     # True=rosnąco, False=malejąco
+        self.var_sort_col = tk.StringVar(value="")
+        self.var_sort_asc = tk.BooleanVar(value=True)
         ttk.Label(sortf, text="Kolumna:").grid(row=0, column=0, sticky="e", padx=8, pady=6)
         self.cmb_sort_col = ttk.Combobox(sortf, textvariable=self.var_sort_col, width=40, values=[], state="readonly")
         self.cmb_sort_col.grid(row=0, column=1, sticky="w", padx=4, pady=6)
@@ -438,6 +706,38 @@ class App(tk.Tk):
             .grid(row=0, column=0, sticky="w", padx=8, pady=6)
         ttk.Radiobutton(lay, text="B — tabela po lewej + scalona kolumna na zdjęcie po prawej; mapa pod spodem", variable=self.var_layout, value="B")\
             .grid(row=1, column=0, sticky="w", padx=8, pady=6)
+
+        # --- CZCIONKA ---
+        fontf = ttk.LabelFrame(parent, text="Czcionka")
+        fontf.pack(fill="x", padx=8, pady=(10,8))
+        ttk.Label(fontf, text="Rodzina:").grid(row=0, column=0, sticky="e", padx=8, pady=6)
+        self.cmb_font = ttk.Combobox(fontf, textvariable=self.var_font_name, width=28,
+                                     values=["Calibri","Arial","Times New Roman","Cambria","Verdana","Segoe UI","Tahoma","Garamond","Courier New"],
+                                     state="readonly")
+        self.cmb_font.grid(row=0, column=1, sticky="w", padx=4, pady=6)
+        ttk.Label(fontf, text="Rozmiar [pt]:").grid(row=0, column=2, sticky="e", padx=8, pady=6)
+        ttk.Entry(fontf, textvariable=self.var_font_size, width=6).grid(row=0, column=3, sticky="w", padx=4, pady=6)
+
+        # --- SZEROKOŚCI KOLUMN (cm) ---
+        colf = ttk.LabelFrame(parent, text="Szerokości kolumn [cm] (0 = AUTO)")
+        colf.pack(fill="x", padx=8, pady=(10,8))
+        ttk.Label(colf, text="Układ A — etykieta:").grid(row=0, column=0, sticky="e", padx=8, pady=6)
+        ttk.Entry(colf, textvariable=self.var_A_label_cm, width=6).grid(row=0, column=1, sticky="w", padx=4, pady=6)
+        ttk.Label(colf, text="Układ B — etykieta:").grid(row=1, column=0, sticky="e", padx=8, pady=6)
+        ttk.Entry(colf, textvariable=self.var_B_label_cm, width=6).grid(row=1, column=1, sticky="w", padx=4, pady=6)
+        ttk.Label(colf, text="wartość:").grid(row=1, column=2, sticky="e", padx=8, pady=6)
+        ttk.Entry(colf, textvariable=self.var_B_value_cm, width=6).grid(row=1, column=3, sticky="w", padx=4, pady=6)
+        ttk.Label(colf, text="zdjęcie:").grid(row=1, column=4, sticky="e", padx=8, pady=6)
+        ttk.Entry(colf, textvariable=self.var_B_photo_cm, width=6).grid(row=1, column=5, sticky="w", padx=4, pady=6)
+
+        # --- ZDJĘCIA: kompresja i skala ---
+        photof = ttk.LabelFrame(parent, text="Zdjęcia — kompresja i skala")
+        photof.pack(fill="x", padx=8, pady=(10,8))
+        ttk.Label(photof, text="Jakość JPG (1–95):").grid(row=0, column=0, sticky="e", padx=8, pady=6)
+        ttk.Entry(photof, textvariable=self.var_jpg_quality, width=6).grid(row=0, column=1, sticky="w", padx=4, pady=6)
+        ttk.Label(photof, text="DPI eksportu (skalowanie):").grid(row=0, column=2, sticky="e", padx=8, pady=6)
+        ttk.Entry(photof, textvariable=self.var_export_dpi, width=6).grid(row=0, column=3, sticky="w", padx=4, pady=6)
+        ttk.Checkbutton(photof, text="Nie powiększaj małych zdjęć", variable=self.var_no_upscale).grid(row=0, column=4, sticky="w", padx=12, pady=6)
 
     # ---- Pomocnicze ----
     def _placeholder_in_extra(self, text):
@@ -507,6 +807,10 @@ class App(tk.Tk):
         d = filedialog.askdirectory()
         if d: self.out_entry.delete(0, tk.END); self.out_entry.insert(0, d)
 
+    def pick_imgdir(self):
+        d = filedialog.askdirectory()
+        if d: self.var_img_dir.set(d)
+
     def load_columns(self):
         path = self.in_entry.get().strip()
         if not path:
@@ -523,6 +827,11 @@ class App(tk.Tk):
         cols_list = [""] + list(self.df.columns)
         self.cmb_source.configure(values=cols_list)
         self.cmb_sort_col.configure(values=cols_list)
+        self.cmb_img_col.configure(values=cols_list)
+        if "objektnummer" in self.df.columns:
+            self.var_img_col.set("objektnummer")
+        else:
+            self.var_img_col.set(cols_list[0] if cols_list else "")
         self.var_sort_col.set("")
 
     def refresh_tree(self):
@@ -594,28 +903,43 @@ class App(tk.Tk):
                                                "Wczytaj preset lub dodaj wiersze/kolumny.")
             return
 
-        # Sortowanie (opcjonalne)
-        df_use = self.df
-        col = self.var_sort_col.get().strip()
-        if col:
-            asc = self.var_sort_asc.get()
-            def _sort_key(s):
-                if s.dtype == "O":
-                    s_num = pd.to_numeric(s.astype(str).str.replace(",", ".", regex=False), errors="coerce")
-                    if s_num.notna().any():
-                        return s_num
-                return s
-            try:
-                df_use = self.df.sort_values(by=col, ascending=asc, na_position="last", key=_sort_key)
-            except Exception:
-                df_use = self.df
-
+        logger = setup_logger(out_dir)
         try:
+            logger.debug(f"[RUN] excel={self.in_entry.get().strip()}")
+            logger.debug(f"[RUN] out_dir={out_dir}, out_name={out_name}")
+            logger.debug(f"[RUN] images_dir={self.var_img_dir.get().strip()}, image_id_col={self.var_img_col.get().strip()}")
+            logger.debug(f"[RUN] layout={self.var_layout.get()}, photo={self.var_photo.get()}, photo_h={self.var_photo_h.get()} cm, split={self.var_photo_split.get()}")
+            logger.debug(f"[RUN] map={self.var_map.get()}, map_h={self.var_map_h.get()} cm")
+            logger.debug(f"[RUN] margins=({self.var_marg_l.get()},{self.var_marg_r.get()},{self.var_marg_t.get()},{self.var_marg_b.get()}) cm")
+            logger.debug(f"[RUN] font=({self.var_font_name.get()},{self.var_font_size.get()} pt)")
+            logger.debug(f"[RUN] extra_cols={extra}")
+            logger.debug(f"[RUN] mapping_rows={len(self.mapping)}")
+            logger.debug(f"[RUN] jpg_quality={self.var_jpg_quality.get()}, export_dpi={self.var_export_dpi.get()}, no_upscale={self.var_no_upscale.get()}")
+
+            # Sortowanie (opcjonalne)
+            df_use = self.df
+            col = getattr(self, "var_sort_col", tk.StringVar(value="")).get().strip() if hasattr(self, "var_sort_col") else ""
+            if col:
+                asc = getattr(self, "var_sort_asc", tk.BooleanVar(value=True)).get()
+                def _sort_key(s):
+                    if s.dtype == "O":
+                        s_num = pd.to_numeric(s.astype(str).str.replace(",", ".", regex=False), errors="coerce")
+                        if s_num.notna().any():
+                            return s_num
+                    return s
+                try:
+                    df_use = self.df.sort_values(by=col, ascending=asc, na_position="last", key=_sort_key)
+                    logger.debug(f"[RUN] sorted by {col}, asc={asc}")
+                except Exception as e:
+                    logger.warning(f"[RUN] sort failed for {col}: {e}")
+                    df_use = self.df
+
             out_file = build_docx(
                 df_use,
                 list(self.mapping), extra, out_dir, out_name,
                 add_photo=self.var_photo.get(),
                 photo_h_cm=float(self.var_photo_h.get()),
+                photo_split=bool(self.var_photo_split.get()),
                 add_map=self.var_map.get(),
                 map_h_cm=float(self.var_map_h.get()),
                 page_break=self.var_break.get(),
@@ -625,10 +949,25 @@ class App(tk.Tk):
                 margin_top_cm=float(self.var_marg_t.get()),
                 margin_bottom_cm=float(self.var_marg_b.get()),
                 layout_mode=self.var_layout.get(),
+                images_dir=self.var_img_dir.get().strip() or None,
+                image_id_column=self.var_img_col.get().strip() or None,
+                base_font_name=self.var_font_name.get().strip() or "Calibri",
+                base_font_size_pt=float(self.var_font_size.get() or 10.0),
+                a_label_cm=float(self.var_A_label_cm.get() or 6.0),
+                b_label_cm=float(self.var_B_label_cm.get() or 0.0),
+                b_value_cm=float(self.var_B_value_cm.get() or 0.0),
+                b_photo_cm=float(self.var_B_photo_cm.get() or 0.0),
+                jpg_quality=int(self.var_jpg_quality.get() or 82),
+                export_dpi=int(self.var_export_dpi.get() or 150),
+                no_upscale=bool(self.var_no_upscale.get()),
+                logger=logger,
             )
         except Exception as e:
-            messagebox.showerror("Błąd", f"Nie udało się wygenerować DOCX:\n{e}"); return
-        messagebox.showinfo("Gotowe", f"Zapisano:\n{out_file}")
+            logger.error(f"[RUN] generation failed: {e}")
+            logger.debug(traceback.format_exc())
+            messagebox.showerror("Błąd", f"Nie udało się wygenerować DOCX:\n{e}\n\nSzczegóły w logu:\n{logger.log_path}")
+            return
+        messagebox.showinfo("Gotowe", f"Zapisano:\n{out_file}\n\nLog:\n{logger.log_path}")
 
 if __name__ == "__main__":
     App().mainloop()
