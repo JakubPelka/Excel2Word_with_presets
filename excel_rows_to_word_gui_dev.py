@@ -48,6 +48,7 @@ _ensure("Pillow","PIL")
 
 # ---------- IMPORTY ----------
 import os, json, logging, traceback, io
+import re
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import pandas as pd
@@ -360,6 +361,18 @@ def read_excel_any(path):
     ext = os.path.splitext(path.lower())[1]
     if ext == ".xls": return pd.read_excel(path, engine="xlrd")
     return pd.read_excel(path)
+    
+    
+def naturalize_text_for_sort(x, pad: int = 8) -> pd.Series:
+    """
+    Zwraca serię tekstów z wyzerowanymi fragmentami liczbowymi,
+    np. 'Plats 2' -> 'plats 00000002'. Działa również, jeśli x nie jest Series.
+    """
+    s = x if isinstance(x, pd.Series) else pd.Series(x)
+    s = s.fillna("").astype(str).str.lower()
+    # zero-pad dla każdej “wyspy” cyfr
+    return s.str.replace(r"\d+", lambda m: f"{int(m.group(0)):0{pad}d}", regex=True)
+
 
 # ---------- PRESETY / ALIASY ----------
 def _norm(s: str) -> str:
@@ -502,10 +515,16 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
 
             doc.add_paragraph("")
             if add_map:
-                p2 = doc.add_paragraph("Kartbild av objektet:")
-                if p2.runs:
-                    if base_font_name: p2.runs[0].font.name = base_font_name
-                    if base_font_size_pt: p2.runs[0].font.size = Pt(base_font_size_pt)
+                p2 = doc.add_paragraph("")
+                obj_id = cur_row.get(image_id_column or "objektnummer", "")
+                obj_id = "" if _is_missing(obj_id) else str(obj_id).strip()
+
+                # Całość pogrubiona:
+                run = p2.add_run(f"Kartbild av objektet: {obj_id}" if obj_id else "Kartbild av objektet:")
+                run.bold = True
+                if base_font_name: run.font.name = base_font_name
+                if base_font_size_pt: run.font.size = Pt(base_font_size_pt)
+                
                 mp = doc.add_table(rows=1, cols=1); mp.style = "Table Grid"; mp.autofit = False
                 mp.rows[0].height = Cm(map_h_cm); mp.cell(0, 0).width = Cm(content_w_cm)
                 _set_cell_text(mp.cell(0, 0), " ", size_pt=base_font_size_pt, font_name=base_font_name)
@@ -535,10 +554,15 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
 
             doc.add_paragraph("")
             if add_photo:
-                p = doc.add_paragraph("Representativt foto:")
-                if p.runs:
-                    if base_font_name: p.runs[0].font.name = base_font_name
-                    if base_font_size_pt: p.runs[0].font.size = Pt(base_font_size_pt)
+                p = doc.add_paragraph("")
+                obj_id = cur_row.get(image_id_column or "objektnummer", "")
+                obj_id = "" if _is_missing(obj_id) else str(obj_id).strip()
+
+                # Całość pogrubiona:
+                run = p.add_run(f"Representativt foto: {obj_id}" if obj_id else "Representativt foto:")
+                run.bold = True
+                if base_font_name: run.font.name = base_font_name
+                if base_font_size_pt: run.font.size = Pt(base_font_size_pt)
                 if photo_split:
                     ph = doc.add_table(rows=1, cols=2); ph.style = "Table Grid"; ph.autofit = False
                     ph.rows[0].height = Cm(photo_h_cm)
@@ -562,10 +586,16 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
                     _set_tbl_borders(ph, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4)
                 doc.add_paragraph("")
             if add_map:
-                p2 = doc.add_paragraph("Kartbild av objektet:")
-                if p2.runs:
-                    if base_font_name: p2.runs[0].font.name = base_font_name
-                    if base_font_size_pt: p2.runs[0].font.size = Pt(base_font_size_pt)
+                p2 = doc.add_paragraph("")
+                obj_id = cur_row.get(image_id_column or "objektnummer", "")
+                obj_id = "" if _is_missing(obj_id) else str(obj_id).strip()
+
+                # Całość pogrubiona:
+                run = p2.add_run(f"Kartbild av objektet: {obj_id}" if obj_id else "Kartbild av objektet:")
+                run.bold = True
+                if base_font_name: run.font.name = base_font_name
+                if base_font_size_pt: run.font.size = Pt(base_font_size_pt)
+
                 mp = doc.add_table(rows=1, cols=1); mp.style = "Table Grid"; mp.autofit = False
                 mp.rows[0].height = Cm(map_h_cm); mp.cell(0, 0).width = Cm(content_w_cm)
                 _set_cell_text(mp.cell(0, 0), " ", size_pt=base_font_size_pt, font_name=base_font_name)
@@ -1001,22 +1031,31 @@ class App(tk.Tk):
             logger.debug(f"[RUN] mapping_rows={len(self.mapping)}")
             logger.debug(f"[RUN] jpg_quality={self.var_jpg_quality.get()}, export_dpi={self.var_export_dpi.get()}, no_upscale={self.var_no_upscale.get()}")
 
-            # Sortowanie (opcjonalne)
+            # --- Sortowanie (opcjonalne) ---
             df_use = self.df
-            col = getattr(self, "var_sort_col", tk.StringVar(value="")).get().strip() if hasattr(self, "var_sort_col") else ""
-            if col:
-                asc = getattr(self, "var_sort_asc", tk.BooleanVar(value=True)).get()
-                def _sort_key(s):
-                    if s.dtype == "O":
-                        s_num = pd.to_numeric(s.astype(str).str.replace(",", ".", regex=False), errors="coerce")
-                        if s_num.notna().any():
-                            return s_num
-                    return s
+            sort_col = self.var_sort_col.get().strip()
+            if sort_col:
+                asc = self.var_sort_asc.get()
+
+                def _sort_key(ser: pd.Series) -> pd.Series:
+                    # liczby / daty sortuj natywnie
+                    if pd.api.types.is_numeric_dtype(ser) or pd.api.types.is_datetime64_any_dtype(ser):
+                        return ser
+                    # jeżeli większość wartości da się zrzutować na liczby -> sortuj liczbowo
+                    try:
+                        as_num = pd.to_numeric(ser.astype(str).str.replace(",", ".", regex=False), errors="coerce")
+                        if as_num.notna().mean() > 0.9:
+                            return as_num
+                    except Exception:
+                        pass
+                    # w przeciwnym razie naturalny porządek dla tekstu
+                    return naturalize_text_for_sort(ser)
+
                 try:
-                    df_use = self.df.sort_values(by=col, ascending=asc, na_position="last", key=_sort_key)
-                    logger.debug(f"[RUN] sorted by {col}, asc={asc}")
+                    df_use = self.df.sort_values(by=sort_col, ascending=asc, na_position="last", key=_sort_key)
+                    logger.debug(f"[RUN] sorted by {sort_col}, asc={asc}")
                 except Exception as e:
-                    logger.warning(f"[RUN] sort failed for {col}: {e}")
+                    logger.warning(f"[RUN] sort failed for {sort_col}: {e}")
                     df_use = self.df
 
             out_file = build_docx(
