@@ -468,6 +468,7 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
             if b_label_cm > 0 and b_value_cm > 0 and (b_label_cm + b_value_cm) > left_cm:
                 value_cm = max(1.0, left_cm - b_label_cm)
 
+            # tabela główna (3 kolumny: etykieta, wartość, kolumna foto)
             t = doc.add_table(rows=len(enabled_rows), cols=3)
             t.style = "Table Grid"; t.autofit = False; t.alignment = WD_TABLE_ALIGNMENT.LEFT
 
@@ -476,55 +477,53 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
                 _set_cell_text(t.cell(i,0), lbl, bold=True, size_pt=base_font_size_pt, font_name=base_font_name); _shade_cell(t.cell(i,0), "F2F2F2")
                 _set_cell_text(t.cell(i,1), val, bold=False, size_pt=base_font_size_pt, font_name=base_font_name)
 
+            # szerokości kolumn
             for r in t.rows:
-                r.cells[0].width = Cm(label_cm); r.cells[1].width = Cm(value_cm); r.cells[2].width = Cm(photo_cm)
+                r.cells[0].width = Cm(label_cm)
+                r.cells[1].width = Cm(value_cm)
+                r.cells[2].width = Cm(photo_cm)
+
+            # podpis w komórce nagłówka (rząd 0, kolumna 2)
+            obj_id = cur_row.get(image_id_column or "objektnummer", "")
+            obj_id = "" if _is_missing(obj_id) else str(obj_id).strip()
+            header_caption = f"Representativt foto: {obj_id}" if obj_id else "Representativt foto:"
+            _set_cell_text(t.cell(0, 2), header_caption, bold=True, size_pt=base_font_size_pt, font_name=base_font_name)
 
             # NAGŁÓWEK — CAŁY pierwszy wiersz:
             _style_header_row(t, base_font_name, base_font_size_pt)
 
-            # Kolumna zdjęcia (scalona) + podpis
-            merged = t.cell(0,2)
-            for i in range(1, len(enabled_rows)):
-                merged = merged.merge(t.cell(i,2))
-            p = merged.paragraphs[0] if merged.paragraphs else merged.add_paragraph("")
-            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-            run = p.add_run("Representativt foto:")
-            if base_font_name: run.font.name = base_font_name
-            if base_font_size_pt: run.font.size = Pt(base_font_size_pt)
+            # Prawa kolumna na zdjęcie: scalanie TYLKO od wiersza 1 w dół (nagłówek zostaje oddzielnie)
+            photo_cell = None
+            if len(enabled_rows) > 1:
+                photo_cell = t.cell(1, 2)
+                for i in range(2, len(enabled_rows)):
+                    photo_cell = photo_cell.merge(t.cell(i, 2))
 
-            # zdjęcia
-            if photo_split:
-                inner = merged.add_table(rows=1, cols=2)
-                inner.style = "Table Grid"; inner.autofit = False
-                inner.rows[0].height = Cm(photo_h_cm)
-                inner.cell(0,0).width = Cm(photo_cm/2.0)
-                inner.cell(0,1).width = Cm(photo_cm/2.0)
-                if img_path:
-                    insert_picture_in_cell(inner.cell(0,0), img_path, frame_w_cm=photo_cm/2.0, frame_h_cm=photo_h_cm,
-                                           logger=logger, jpg_quality=jpg_quality, export_dpi=export_dpi, no_upscale=no_upscale)
-                if img2_path:
-                    insert_picture_in_cell(inner.cell(0,1), img2_path, frame_w_cm=photo_cm/2.0, frame_h_cm=photo_h_cm,
-                                           logger=logger, jpg_quality=jpg_quality, export_dpi=export_dpi, no_upscale=no_upscale)
-                _set_tbl_borders(inner, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4)
-            else:
-                if img_path:
-                    insert_picture_in_cell(merged, img_path, frame_w_cm=photo_cm, frame_h_cm=None,
-                                           logger=logger, jpg_quality=jpg_quality, export_dpi=export_dpi, no_upscale=no_upscale)
+            # Wstaw zdjęcie bez zagnieżdżonej tabeli (w B ignorujemy podział na 2 pola)
+            if img_path and photo_cell is not None:
+                insert_picture_in_cell(
+                    photo_cell,
+                    img_path,
+                    frame_w_cm=photo_cm,     # szerokość kolumny foto
+                    frame_h_cm=None,         # wysokość nie na sztywno – komórka sama się rozszerzy
+                    logger=logger,
+                    jpg_quality=jpg_quality,
+                    export_dpi=export_dpi,
+                    no_upscale=no_upscale
+                )
 
             _set_tbl_borders(t, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4)
 
+            # Mapa pod tabelą (opcjonalnie)
             doc.add_paragraph("")
             if add_map:
                 p2 = doc.add_paragraph("")
-                obj_id = cur_row.get(image_id_column or "objektnummer", "")
-                obj_id = "" if _is_missing(obj_id) else str(obj_id).strip()
-
-                # Całość pogrubiona:
+                # podpis mapy z ID (bold)
                 run = p2.add_run(f"Kartbild av objektet: {obj_id}" if obj_id else "Kartbild av objektet:")
                 run.bold = True
                 if base_font_name: run.font.name = base_font_name
                 if base_font_size_pt: run.font.size = Pt(base_font_size_pt)
-                
+
                 mp = doc.add_table(rows=1, cols=1); mp.style = "Table Grid"; mp.autofit = False
                 mp.rows[0].height = Cm(map_h_cm); mp.cell(0, 0).width = Cm(content_w_cm)
                 _set_cell_text(mp.cell(0, 0), " ", size_pt=base_font_size_pt, font_name=base_font_name)
@@ -563,6 +562,7 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
                 run.bold = True
                 if base_font_name: run.font.name = base_font_name
                 if base_font_size_pt: run.font.size = Pt(base_font_size_pt)
+
                 if photo_split:
                     ph = doc.add_table(rows=1, cols=2); ph.style = "Table Grid"; ph.autofit = False
                     ph.rows[0].height = Cm(photo_h_cm)
@@ -609,6 +609,7 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
     doc.save(out_file)
     if logger: logger.debug(f"[DOCX] saved: {out_file}")
     return out_file
+
 
 # ---------- GUI ----------
 class App(tk.Tk):
