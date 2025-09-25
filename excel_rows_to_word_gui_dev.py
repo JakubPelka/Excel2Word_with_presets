@@ -1,12 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-Excel → mikro‑tabele w Wordzie (GUI, Tkinter) z presetami, układem A/B,
-auto‑zdjęciami (match po kolumnie) + szerokościami kolumn + czcionką + LOG + KOMPRESJA
+Excel → mikro-tabele w Wordzie (GUI, Tkinter) z presetami, układem A/B,
+auto-zdjęciami (match po kolumnie) + szerokościami kolumn + czcionką + LOG + KOMPRESJA
 + podział ramki zdjęcia na 2 pola
-+ **NOWOŚĆ**: automatyczne foto #2 ze **sufiksami: _2, -2, (2),  (2) ze spacją**
-+ **NOWOŚĆ**: zdjęcia centrowane w obrębie ramki (poziomo; pionowo – standard Worda)
++ foto #2: sufiksy _2, -2, (2),  (2) oraz centrowanie zdjęć
 
-Autor: Ty + ChatGPT
+DOMYŚLNE (zgodnie z prośbą):
+- JPG=90, DPI=450
+- Arial 9 pt
+- Marginesy: L=2.0, P=6.5, G=3.9, D=3.0
+
+NOWOŚĆ:
+- pierwszy wiersz każdej głównej tabeli = nagłówek: tło #A6A6A6, biały pogrubiony tekst
 """
 
 # ---------- BOOTSTRAP PIP ----------
@@ -47,7 +52,7 @@ from tkinter import filedialog, messagebox, ttk
 import pandas as pd
 from pathlib import Path
 from docx import Document
-from docx.shared import Cm, Pt
+from docx.shared import Cm, Pt, RGBColor
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
@@ -84,8 +89,10 @@ def setup_logger(out_dir: str):
 # ---------- TRANSFORMACJE ----------
 def _is_missing(v):
     return v is None or (isinstance(v, float) and pd.isna(v)) or (isinstance(v, str) and v.strip()=="")
+
 def tf_identity(val, row, comma=False):
     return "" if _is_missing(val) else str(val)
+
 def tf_m2_to_ha_round2(val, row, comma=False):
     if _is_missing(val): return ""
     try:
@@ -94,11 +101,14 @@ def tf_m2_to_ha_round2(val, row, comma=False):
         return s.replace(".", ",") if comma else s
     except Exception:
         return ""
+
 def tf_prelim_to_bedomning(val, row, comma=False):
     v = "" if _is_missing(val) else str(val).strip().lower()
     return "Säker" if v in {"0","nej","no","false","0.0",""} else "Preliminärt"
+
 def tf_constant(val, row, comma=False, const_val=""):
     return const_val
+
 def tf_date_only(val, row, comma=False):
     if _is_missing(val): return ""
     try:
@@ -111,6 +121,7 @@ def tf_date_only(val, row, comma=False):
         return d.date().isoformat() if not pd.isna(d) else s
     except Exception:
         return str(val)
+
 def tf_bool_ja_nej(val, row, comma=False):
     if _is_missing(val): return ""
     s = str(val).strip().lower()
@@ -140,14 +151,17 @@ def _shade_cell(cell, fill_hex="F2F2F2"):
     shd = OxmlElement("w:shd")
     shd.set(qn("w:val"), "clear"); shd.set(qn("w:color"), "auto"); shd.set(qn("w:fill"), fill_hex)
     tcPr.append(shd)
-def _set_cell_text(cell, text, bold=False, size_pt=None, font_name=None):
+
+def _set_cell_text(cell, text, bold=False, size_pt=None, font_name=None, color_rgb=None):
     cell.text = "" if text is None else str(text)
     for p in cell.paragraphs:
         for r in p.runs:
             if font_name: r.font.name = font_name
             if size_pt:   r.font.size = Pt(size_pt)
+            if color_rgb: r.font.color.rgb = RGBColor(*color_rgb)
             r.font.bold = bold
-    if cell.paragraphs: cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
+    if cell.paragraphs:
+        cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
 
 def _set_tbl_borders(table, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4, color="000000"):
     tbl = table._element  # CT_Tbl
@@ -168,6 +182,14 @@ def _set_tbl_borders(table, top=4, left=4, bottom=4, right=4, insideH=4, insideV
             e.set(qn("w:color"), color); e.set(qn("w:space"), "0")
     set_edge("top", top); set_edge("left", left); set_edge("bottom", bottom); set_edge("right", right)
     set_edge("insideH", insideH); set_edge("insideV", insideV)
+
+def _style_header_row(table, font_name, font_size_pt):
+    """Nadaje styl nagłówkowy pierwszemu wierszowi: #A6A6A6 + biały pogrubiony tekst."""
+    if not table.rows: return
+    row0 = table.rows[0]
+    for c in row0.cells:
+        _shade_cell(c, "A6A6A6")
+        _set_cell_text(c, c.text, bold=True, size_pt=font_size_pt, font_name=font_name, color_rgb=(0xFF,0xFF,0xFF))
 
 # ---------- OBRAZY ----------
 def _normalize_slug_candidates(val):
@@ -219,10 +241,7 @@ def find_image_for(id_value, images_dir, logger=None):
 
 def find_image_for_second(id_value, images_dir, logger=None, suffixes=None):
     """
-    Foto #2: warianty <base><suffix>.*
-    Domyślne sufiksy: "_2", "-2", "(2)", " (2)" (ze spacją).
-    Przykłady: "Lokal 2_2.jpg", "Lokal 2-2.jpg", "Lokal 2(2).jpg", "Lokal 2 (2).jpg"
-    oraz analogiczne z podkreśleniem po bazie: "Lokal_2_2.jpg", "Lokal_2-2.jpg", "Lokal_2(2).jpg", "Lokal_2 (2).jpg".
+    Foto #2: warianty <base><suffix>.*  Domyślne sufiksy: "_2", "-2", "(2)", " (2)".
     """
     if suffixes is None:
         suffixes = ("_2", "-2", "(2)", " (2)")
@@ -234,16 +253,14 @@ def find_image_for_second(id_value, images_dir, logger=None, suffixes=None):
     cands = []
     for b in bases:
         for sfx in suffixes:
-            cands.append(b + sfx)              # "Lokal 2_2", "Lokal 2-2", "Lokal 2(2)", "Lokal 2 (2)"
+            cands.append(b + sfx)
     if logger: logger.debug(f"[IMG2] candidates={cands}")
-    # najpierw bez skanu — bezpośrednie ścieżki
     for base in cands:
         for ext in ("jpg","jpeg","png","JPG","JPEG","PNG"):
             p = os.path.join(images_dir, f"{base}.{ext}")
             if os.path.exists(p):
                 if logger: logger.debug(f"[IMG2] FOUND {p}")
                 return p
-    # skan folderu — case-insensitive
     try:
         want = {x.lower() for x in cands}
         for fn in os.listdir(images_dir):
@@ -261,8 +278,8 @@ def _cm_to_px(cm, dpi):
     return int(round(cm * dpi / 2.54))
 
 def insert_picture_in_cell(cell, image_path, frame_w_cm, frame_h_cm=None, logger=None,
-                           jpg_quality=82, export_dpi=150, no_upscale=True):
-    """Skaluje obraz do ramki, re‑koduje do JPEG (bez EXIF), wstawia do komórki i centruje poziomo."""
+                           jpg_quality=90, export_dpi=450, no_upscale=True):
+    """Skaluje obraz do ramki, re-koduje do JPEG (bez EXIF), wstawia i centruje poziomo."""
     if not image_path or not os.path.exists(image_path):
         if logger: logger.debug(f"[IMG] no image to insert: {image_path}")
         return False
@@ -291,7 +308,6 @@ def insert_picture_in_cell(cell, image_path, frame_w_cm, frame_h_cm=None, logger
             new_w_cm = new_w / export_dpi * 2.54
             target_w_cm = min(frame_w_cm, new_w_cm)
 
-        # centrowanie w komórce
         try:
             cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
         except Exception:
@@ -316,6 +332,7 @@ def read_excel_any(path):
 # ---------- PRESETY / ALIASY ----------
 def _norm(s: str) -> str:
     return "".join(ch for ch in str(s).lower() if ch.isalnum())
+
 def resolve_source_name(wanted: str, df_columns, aliases: dict):
     cols = list(map(str, df_columns))
     by_norm = {_norm(c): c for c in cols}
@@ -332,14 +349,14 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
                add_photo=True, photo_h_cm=6.0, photo_split=False,
                add_map=True, map_h_cm=6.0,
                page_break=False, use_decimal_comma=True,
-               margin_left_cm=2.0, margin_right_cm=2.0,
-               margin_top_cm=2.0, margin_bottom_cm=2.0,
+               margin_left_cm=2.0, margin_right_cm=6.5,
+               margin_top_cm=3.9, margin_bottom_cm=3.0,
                layout_mode="A",
                images_dir=None, image_id_column="objektnummer",
-               base_font_name="Calibri", base_font_size_pt=10,
+               base_font_name="Arial", base_font_size_pt=9,
                a_label_cm=6.0,
                b_label_cm=0.0, b_value_cm=0.0, b_photo_cm=0.0,
-               jpg_quality=82, export_dpi=150, no_upscale=True,
+               jpg_quality=90, export_dpi=450, no_upscale=True,
                logger=None):
     if logger:
         logger.debug(f"[DOCX] start build_docx out_name={out_name}, layout={layout_mode}, "
@@ -377,7 +394,7 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
         if images_dir and image_id_column:
             id_val = cur_row.get(image_id_column, None)
             img_path = find_image_for(id_val, images_dir, logger=logger)
-            img2_path = find_image_for_second(id_val, images_dir, logger=logger)  # ma suffixes domyślne
+            img2_path = find_image_for_second(id_val, images_dir, logger=logger)
 
         if layout_mode == "B" and add_photo and enabled_rows:
             # szerokości B (0=auto)
@@ -405,9 +422,14 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
             for r in t.rows:
                 r.cells[0].width = Cm(label_cm); r.cells[1].width = Cm(value_cm); r.cells[2].width = Cm(photo_cm)
 
+            # NAGŁÓWEK — CAŁY pierwszy wiersz:
+            _style_header_row(t, base_font_name, base_font_size_pt)
+
+            # Kolumna zdjęcia (scalona) + podpis
             merged = t.cell(0,2)
             for i in range(1, len(enabled_rows)):
                 merged = merged.merge(t.cell(i,2))
+            # (nie nadpisujemy shadingu, żeby pasek nagłówka przy wierszu 0 został widoczny)
             p = merged.paragraphs[0] if merged.paragraphs else merged.add_paragraph("")
             p.alignment = WD_ALIGN_PARAGRAPH.LEFT
             run = p.add_run("Representativt foto:")
@@ -469,6 +491,9 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
             for r in t.rows:
                 r.cells[0].width = Cm(label_cm); r.cells[1].width = Cm(value_cm)
 
+            # NAGŁÓWEK — CAŁY pierwszy wiersz:
+            _style_header_row(t, base_font_name, base_font_size_pt)
+
             _set_tbl_borders(t, top=4, left=4, bottom=4, right=4, insideH=4, insideV=4)
 
             doc.add_paragraph("")
@@ -522,7 +547,7 @@ def build_docx(df, mapping_rows, extra_cols, out_path, out_name,
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Excel → Mikro‑tabele Word — presety, układ A/B, 2‑zdjęcia (_2/-2/(2)), foto‑match, kolumny, czcionka, log, kompresja")
+        self.title("Excel → Mikro-tabele Word — presety, układ A/B, 2-zdjęcia (_2/-2/(2)), foto-match, kolumny, czcionka, log, kompresja")
         self.geometry("1180x980"); self.resizable(True, True)
         self.df = None
         self.mapping = []
@@ -531,15 +556,16 @@ class App(tk.Tk):
         # zdjęcia
         self.var_img_dir = tk.StringVar(value="")
         self.var_img_col = tk.StringVar(value="objektnummer")
-        # foto‑kompresja
-        self.var_jpg_quality = tk.IntVar(value=82)
-        self.var_export_dpi = tk.IntVar(value=150)
+        # foto-kompresja — DOMYŚLNE wg wymagań
+        self.var_jpg_quality = tk.IntVar(value=90)
+        self.var_export_dpi = tk.IntVar(value=450)
         self.var_no_upscale = tk.BooleanVar(value=True)
         # foto: podział na 2 pola
         self.var_photo_split = tk.BooleanVar(value=True)
-        # czcionka
-        self.var_font_name = tk.StringVar(value="Calibri")
-        self.var_font_size = tk.DoubleVar(value=10.0)
+        # czcionka — DOMYŚLNE wg wymagań
+        self.var_font_name = tk.StringVar(value="Arial")
+        # Uwaga: 9.0 pt
+        self.var_font_size = tk.DoubleVar(value=9.0)
         # szerokości kolumn
         self.var_A_label_cm = tk.DoubleVar(value=6.0)
         self.var_B_label_cm = tk.DoubleVar(value=0.0)   # 0 = auto
@@ -654,11 +680,11 @@ class App(tk.Tk):
         self.var_map = tk.BooleanVar(value=True);   self.var_map_h = tk.DoubleVar(value=6.0)
         self.var_break = tk.BooleanVar(value=True); self.var_comma = tk.BooleanVar(value=True)
 
-        # Marginesy [cm]
+        # Marginesy [cm] — DOMYŚLNE wg wymagań
         self.var_marg_l = tk.DoubleVar(value=2.0)
-        self.var_marg_r = tk.DoubleVar(value=2.0)
-        self.var_marg_t = tk.DoubleVar(value=2.0)
-        self.var_marg_b = tk.DoubleVar(value=2.0)
+        self.var_marg_r = tk.DoubleVar(value=6.5)
+        self.var_marg_t = tk.DoubleVar(value=3.9)
+        self.var_marg_b = tk.DoubleVar(value=3.0)
 
         ttk.Checkbutton(opt, text="Dodaj ramkę na zdjęcie po każdym rekordzie", variable=self.var_photo)\
             .grid(row=0, column=0, sticky="w", padx=8, pady=4)
@@ -707,12 +733,12 @@ class App(tk.Tk):
         ttk.Radiobutton(lay, text="B — tabela po lewej + scalona kolumna na zdjęcie po prawej; mapa pod spodem", variable=self.var_layout, value="B")\
             .grid(row=1, column=0, sticky="w", padx=8, pady=6)
 
-        # --- CZCIONKA ---
+        # --- CZCIONKA — DOMYŚLNE wg wymagań ---
         fontf = ttk.LabelFrame(parent, text="Czcionka")
         fontf.pack(fill="x", padx=8, pady=(10,8))
         ttk.Label(fontf, text="Rodzina:").grid(row=0, column=0, sticky="e", padx=8, pady=6)
         self.cmb_font = ttk.Combobox(fontf, textvariable=self.var_font_name, width=28,
-                                     values=["Calibri","Arial","Times New Roman","Cambria","Verdana","Segoe UI","Tahoma","Garamond","Courier New"],
+                                     values=["Arial","Calibri","Times New Roman","Cambria","Verdana","Segoe UI","Tahoma","Garamond","Courier New"],
                                      state="readonly")
         self.cmb_font.grid(row=0, column=1, sticky="w", padx=4, pady=6)
         ttk.Label(fontf, text="Rozmiar [pt]:").grid(row=0, column=2, sticky="e", padx=8, pady=6)
@@ -730,7 +756,7 @@ class App(tk.Tk):
         ttk.Label(colf, text="zdjęcie:").grid(row=1, column=4, sticky="e", padx=8, pady=6)
         ttk.Entry(colf, textvariable=self.var_B_photo_cm, width=6).grid(row=1, column=5, sticky="w", padx=4, pady=6)
 
-        # --- ZDJĘCIA: kompresja i skala ---
+        # --- ZDJĘCIA: kompresja i skala — DOMYŚLNE wg wymagań ---
         photof = ttk.LabelFrame(parent, text="Zdjęcia — kompresja i skala")
         photof.pack(fill="x", padx=8, pady=(10,8))
         ttk.Label(photof, text="Jakość JPG (1–95):").grid(row=0, column=0, sticky="e", padx=8, pady=6)
@@ -951,14 +977,14 @@ class App(tk.Tk):
                 layout_mode=self.var_layout.get(),
                 images_dir=self.var_img_dir.get().strip() or None,
                 image_id_column=self.var_img_col.get().strip() or None,
-                base_font_name=self.var_font_name.get().strip() or "Calibri",
-                base_font_size_pt=float(self.var_font_size.get() or 10.0),
+                base_font_name=self.var_font_name.get().strip() or "Arial",
+                base_font_size_pt=float(self.var_font_size.get() or 9.0),
                 a_label_cm=float(self.var_A_label_cm.get() or 6.0),
                 b_label_cm=float(self.var_B_label_cm.get() or 0.0),
                 b_value_cm=float(self.var_B_value_cm.get() or 0.0),
                 b_photo_cm=float(self.var_B_photo_cm.get() or 0.0),
-                jpg_quality=int(self.var_jpg_quality.get() or 82),
-                export_dpi=int(self.var_export_dpi.get() or 150),
+                jpg_quality=int(self.var_jpg_quality.get() or 90),
+                export_dpi=int(self.var_export_dpi.get() or 450),
                 no_upscale=bool(self.var_no_upscale.get()),
                 logger=logger,
             )
