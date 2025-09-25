@@ -1,82 +1,63 @@
-# Excel → Word: mikro‑tabele z Excela (GUI)
+# Excel → Word: mikro‑tabele (GUI)
 
-Konwerter, który **rozbija wiersze Excela** na **„mikro‑tabele” w Wordzie**. Działa na `.xlsx` i `.xls`, ma **GUI**, edytowalne **mapowanie pól**, kolejność, transformacje (m.in. m²→ha, sama data, logika „Säker/Preliminärt”), oraz **ramki** na zdjęcie i mapę. Projekt przygotowany pod „Naturvärdesbiotop”, ale dzięki **presetom JSON** jest uniwersalny.
+Konwerter, który **rozbija wiersze Excela** na **„mikro‑tabele” w Wordzie**. Obsługuje `.xlsx` i `.xls`, ma wygodne **GUI**, **presety JSON**, edytowalne **mapowanie pól**, transformacje, sortowanie „naturalne”, automatyczne **ramki na zdjęcia i mapę**, układy **A/B**, globalną **czcionkę i marginesy**, kompresję zdjęć oraz **log** z przebiegu.
 
-> Wersja „preset‑first”: brak domyślnej mapy w kodzie. Najpierw wybierasz **Excel**, potem **preset**.
-
----
-
-## Co nowego (UX)
-
-* ✅ **Automatyczne wczytywanie kolumn** po wybraniu pliku Excel (bez dodatkowego przycisku).
-* ✅ **Brak domyślnej mapy** – mapa startuje pusta; wczytujesz **preset** z JSON.
-* ✅ **„Pozostałe kolumny”** są **puste do czasu wczytania presetu** (placeholder). Po wczytaniu pokazują tylko **kolumny nieużyte** w mapie i aktualizują się po każdej zmianie.
-* ✅ **Ramka na mapę** (po zdjęciu) z osobną wysokością.
-* ✅ **Podział strony po każdym rekordzie** – ustawienie w Opcjach (domyślnie **włączone** w przykładowej konfiguracji).
-* ✅ **Help** pod edytorem mapy ma zawijanie tekstu.
-* ✅ **Brak pop‑upów** po wczytaniu kolumn (czytelny feedback w UI).
+> Wersja *preset‑first*: najpierw wybierasz plik Excel, potem preset JSON.
 
 ---
 
-## Funkcje
+## Co nowego
 
-* Odczyt **Excel** (`.xlsx` – openpyxl, `.xls` – xlrd ≥ 2.0.1)
-* Generacja **DOCX**: dla **każdego wiersza** powstaje mikro‑tabela (Nagłówek ↔ Wartość)
-* **Mapowanie pól**: Etykieta (Nowa nazwa), Źródło (kolumna Excela), Transformacja, Stała, Włącz/Wyłącz
-* **Kolejność** (↑/↓), **Dodaj z kolumny…**, **Dodaj wiersz** (stała), Usuń
-* **Transformacje** wbudowane:
+* **Układ B (POPRAWIONY)** – prawa kolumna:
 
-  * `identity` – bez zmian
-  * `m2_to_ha_round2` – m² → ha, zaokrąglenie 0.01 (obsługa przecinka)
-  * `date_only` – tylko część daty `YYYY‑MM‑DD`
-  * `prelim_to_bedomning` – `0/nej/false/puste` → **Säker**, inne → **Preliminärt**
-  * `constant` – stała wartość (do ręcznego uzupełnienia)
-* **Ramki**: zdjęcie + mapa (wysokość w cm), **podział strony** po nich
-* **Lokalizacja liczb**: opcja **przecinka dziesiętnego**
-* **Braki wartości**: zapisywane jako **„ - ”** (nie dotyczy pól `constant`)
-* **Presety JSON**: konfigurują mapę, aliasy kolumn i opcje dokumentu
+  * wiersz 0 to **nagłówek** (szare tło `#A6A6A6`, biały bold);
+  * **poniżej** jedna scalona komórka na zdjęcie (**bez** tabeli w tabeli i bez dzielenia pola).
+* **Naturalne sortowanie** (human sort) – np. `Plats 2` < `Plats 10`.
+* **Transform `format`** – budowanie wartości z wielu kolumn wg szablonu (np. `"{xcoord}, {ycoord}"`).
+* **Automatyczne zdjęcia**: wskazujesz folder, kolumnę z ID (domyślnie `objektnummer`).
+
+  * Drugi kadr rozpoznawany po sufiksach: `_2`, `-2`, `(2)`, ` (2)`.
+  * **Układ A** może dzielić ramkę na **2 pola** (A: tak, B: nie – zgodnie z powyższą poprawką).
+  * Zdjęcia są **centrowane**, skalowane bez nadmiernego powiększania i **kompresowane**.
+* **Styl nagłówka** tabeli: tło `#A6A6A6`, biały, pogrubiony tekst.
+* **Globalna czcionka i marginesy** (domyślnie: Arial 9 pt; L=2.0, P=6.5, G=3.9, D=3.0 cm).
+* **Szerokości kolumn**:
+
+  * Układ A: szerokość kolumny etykiet.
+  * Układ B: szer. etykiety, wartości i kolumny zdjęcia.
+* **Puste wartości** zapisywane jako `" - "` (nie dotyczy `constant`).
+* **Log** z pracy w katalogu wyjściowym (łatwe diagnozowanie problemów).
 
 ---
 
 ## Wymagania
 
 * Python 3.8+
-* Internet przy pierwszym uruchomieniu (auto‑bootstrap pip). W środowiskach z blokadami – zainstaluj ręcznie:
-
-```bash
-pip install -U pandas python-docx openpyxl xlrd>=2.0.1
-```
+* Biblioteki: `pandas`, `python-docx`, `openpyxl`, `xlrd>=2.0.1` (dla `.xls`), `Pillow`.
+* Skrypt sam doinstaluje zależności (jeśli środowisko na to pozwala). W środowiskach zamkniętych zainstaluj ręcznie.
 
 ---
 
-## Uruchomienie
+## Szybki start
 
-```bash
-python excel_rows_to_word_gui.py
-```
-
-**Przepływ („preset‑first”):**
-
-1. Kliknij **Wybierz…** obok pola *Plik Excel* → kolumny wczytają się **automatycznie** (mapa pozostaje pusta).
-2. Kliknij **Wczytaj preset…** i wskaż JSON (np. `presets/naturvardesbiotop.json`).
-3. W zakładce **Mapowanie pól** dopracuj ewentualne szczegóły (etykiety, transformacje, kolejność, stałe).
-4. W **Pozostałych kolumnach** (po presetcie) zaznacz, co jeszcze dorzucić.
-5. W **Opcjach** ustaw ramki (zdjęcie/mapa), wysokości, **podział strony**, przecinek/kropka.
-6. **Generuj DOCX**.
-
-> Jeśli mapa jest pusta **i** nic nie wybrano w „Pozostałe kolumny”, skrypt ostrzeże przed generowaniem pustego dokumentu.
+1. Uruchom: `python excel_rows_to_word_gui.py` (lub wersję *\_dev*).
+2. **Plik Excel** → kolumny wczytają się automatycznie.
+3. **Wczytaj preset…** (JSON) → pojawi się mapa pól.
+4. W zakładce **Mapowanie pól** dopracuj etykiety, kolejność, transformacje.
+5. W **Pozostałych kolumnach** zaznacz to, co chcesz dodać *ponad preset*.
+6. W **Opcjach** ustaw: zdjęcie/mapę, wysokości, **podział strony**, **sortowanie**, **układ A/B**, **czcionkę**, **marginesy**, **szerokości kolumn**, kompresję zdjęć.
+7. (Opcjonalnie) wskaż **folder zdjęć** i **kolumnę ID** do dopasowania.
+8. Kliknij **Generuj DOCX**.
 
 ---
 
-## Presety (JSON)
+## Presety JSON
 
-Presety są w katalogu `presets/`. Zawierają nazwę, opcje, aliasy kolumn (pomagają trafić w różne nazwy) i listę mapowań.
-
-**Przykład:** `presets/naturvardesbiotop.json`
+Struktura:
 
 ```json
 {
-  "name": "Naturvärdesbiotop (preset)",
+  "name": "Nazwa preset",
   "version": 1,
   "options": {
     "decimal_comma": true,
@@ -84,85 +65,104 @@ Presety są w katalogu `presets/`. Zawierają nazwę, opcje, aliasy kolumn (poma
     "photo": { "enabled": true, "height_cm": 6.0 },
     "map":   { "enabled": true, "height_cm": 6.0 }
   },
-  "aliases": {
-    "Shape__Area": ["Shape_Area", "ShapeArea"],
-    "objektnummer": ["objectnumber", "objektnr"],
-    "hydromorfologiskTyp": ["hydromorfologi", "hydromorfologisk_typ"],
-    "vardearterKandaTidigare": ["vardeArterKandaTidigare", "vardearterKändaTidigare"],
-    "vardearterObserverade": ["vardeArterObserverade", "vardearterObserverade"],
-    "invasivaFrammandeArter": ["invasivaFrämmandeArter", "invasivaArter"],
-    "datumForObjektavgr": ["datumFörObjektavgr", "datumForFaltbesok", "datumFältbesök"],
-    "preliminarAvgransning": ["preliminärAvgränsning", "preliminar_avgransning"],
-    "naturvardesklass": ["naturvärdesklass", "naturvarde_klass"]
-  },
+  "aliases": { "aliasKolumny": ["inne_nazwy"] },
   "mapping": [
-    { "enabled": true,  "label": "Naturvärdesbiotop",                "source": "objektnummer",            "transform": "identity",             "const": "" },
-    { "enabled": true,  "label": "Naturvärdesklass",                 "source": "naturvardesklass",        "transform": "identity",             "const": "" },
-    { "enabled": true,  "label": "Areal (ha)",                       "source": "Shape__Area",             "transform": "m2_to_ha_round2",      "const": "" },
-    { "enabled": true,  "label": "Naturtyp",                         "source": "naturtyp",                "transform": "identity",             "const": "" },
-    { "enabled": true,  "label": "Biotoptyp",                        "source": "",                        "transform": "constant",             "const": "" },
-    { "enabled": true,  "label": "Hydrologisk huvudgrupp",           "source": "hydromorfologiskTyp",     "transform": "identity",             "const": "" },
-    { "enabled": true,  "label": "Natura 2000-naturtyp",             "source": "",                        "transform": "constant",             "const": "" },
-    { "enabled": true,  "label": "Beskrivning",                      "source": "objektbeskrivning",       "transform": "identity",             "const": "" },
-    { "enabled": true,  "label": "Biotopvärde",                      "source": "biotopvarden",            "transform": "identity",             "const": "" },
-    { "enabled": true,  "label": "Tidigare kända värdearter",        "source": "vardearterKandaTidigare", "transform": "identity",             "const": "" },
-    { "enabled": true,  "label": "Inventerade värdearter",           "source": "vardearterObserverade",   "transform": "identity",             "const": "" },
-    { "enabled": true,  "label": "Invasiva främmande arter",         "source": "invasivaFrammandeArter",  "transform": "identity",             "const": "" },
-    { "enabled": true,  "label": "Artvärde",                         "source": "artvarden",               "transform": "identity",             "const": "" },
-    { "enabled": true,  "label": "Motivering till naturvärdesklass", "source": "",                        "transform": "constant",             "const": "" },
-    { "enabled": true,  "label": "Datum för fältbesök",              "source": "datumForObjektavgr",      "transform": "date_only",            "const": "" },
-    { "enabled": true,  "label": "Inventerare",                      "source": "utforare",                "transform": "identity",             "const": "" },
-    { "enabled": true,  "label": "Bedömning",                        "source": "preliminarAvgransning",   "transform": "prelim_to_bedomning",  "const": "" }
+    { "enabled": true, "label": "Etykieta", "source": "kolumna", "transform": "identity", "const": "" },
+    { "enabled": true, "label": "Koordinater", "sources": ["xcoord","ycoord"], "transform": "format", "const": "{xcoord}, {ycoord}" }
   ]
 }
 ```
 
-> **Aliasowanie kolumn** pozwala, by preset zadziałał nawet, gdy w Excelu nazwy są trochę inne.
+**Wyłączone** wiersze: `"enabled": false` (zostają w pliku, ale nie trafiają do Worda).
+
+### Transformy wbudowane
+
+* `identity` – bez zmian
+* `m2_to_ha_round2` – m² → ha (zaokrąglenie 0,01; lokalizacja kropka/przecinek)
+* `date_only` – tylko data `YYYY‑MM‑DD`
+* `prelim_to_bedomning` – 0/"nej"/false/puste → **Säker**, w przeciwnym razie **Preliminärt**
+* `constant` – stała wartość
+* `format` – składanie z wielu kolumn wg szablonu z `const`
 
 ---
 
-## GUI — skrót
+## GUI – przegląd
 
-### Mapowanie pól
+**Główne pola**
 
-* Lista pozycji (każda → wiersz w Wordzie).
-* **Edytuj / dodaj wiersz**:
+* Plik Excel, Folder wyjściowy, Nazwa pliku `.docx`
+* Folder zdjęć (opcjonalnie), **Kolumna dopasowania zdjęć** (np. `objektnummer`)
+* *Wczytaj preset…* – wybranie presetu JSON
 
-  * **Włączony** – czy pozycja trafi do Worda
-  * **Nowa nazwa** – etykieta w tabeli Word
-  * **Źródło** – kolumna z Excela (może być puste przy `constant`)
-  * **Transformacja** – patrz lista wyżej
-  * **Stała** – tekst dla `constant`
-  * **Zastosuj** – aktualizacja wybranego wiersza
-  * **Dodaj z kolumny…** – tworzy pozycję z wybranego źródła
-  * **Dodaj wiersz** – tworzy pustą pozycję `constant`
-* **↑/↓** – zmiana kolejności, **Usuń** – kasuje pozycję
+**Zakładki**
 
-### Pozostałe kolumny
+* **Mapowanie pól** – lista pozycji (każda → wiersz w Wordzie): włącz/wyłącz, etykieta, źródło, transform, stała; przyciski **↑/↓**, **Usuń**, **Dodaj z kolumny…**, **Dodaj wiersz** (stała). Pomoc pod listą ma zawijanie tekstu.
+* **Pozostałe kolumny** – pokaże tylko **nieużyte** kolumny po wczytaniu presetu.
+* **Opcje**:
 
-* **Przed presetem:** placeholder (pusto).
-* **Po presetcie:** lista tylko **nieużytych** kolumn – zaznacz, by dodać je na koniec tabeli (transformacja `identity`).
+  * **Dokument**: ramka **zdjęcia** (wysokość,
+    *A: opcjonalny podział na 2 pola*; *B: zawsze jedna komórka*), ramka **mapy**, **podział strony**, przecinek dziesiętny.
+  * **Sortowanie**: wybór kolumny + kierunek (A→Z/Z→A). Dla tekstu używany jest **human sort**.
+  * **Układ**: **A** (tabela, potem zdjęcie i mapa) / **B** (tabela z prawą kolumną na zdjęcie; mapa pod spodem).
+  * **Czcionka**: rodzina i rozmiar (domyślnie Arial 9 pt).
+  * **Szerokości kolumn**:
 
-### Opcje dokumentu
-
-* **Ramka zdjęcia** (+ wysokość w cm)
-* **Ramka mapy** (+ wysokość w cm)
-* **Podział strony po każdym rekordzie** (po zdjęciu i mapie)
-* **Użyj przecinka dziesiętnego** (np. `0,01`)
+    * A: szerokość kolumny etykiet;
+    * B: szerokości etykiety, wartości, kolumny zdjęcia.
+  * **Zdjęcia – kompresja**: jakość JPG, DPI eksportu, „nie powiększaj małych zdjęć”.
+  * **Marginesy**: lewy/prawy/górny/dolny w cm.
 
 ---
 
-## Zachowanie wartości pustych
+## Zasady zdjęć
 
-* Dla pól ze źródła (`identity`, `m2_to_ha_round2`, `date_only`, `prelim_to_bedomning`) brak wartości → **„ - ”**.
-* Dla `constant` można zostawić puste – do ręcznego wpisania w GUI.
+* Nazwa pliku == wartość z kolumny ID (np. `Lokal 2.jpg`). Dozwolone także warianty z `_` i numerem bez spacji.
+* Drugie zdjęcie (tylko **Układ A** przy *podziale ramki*): sufiksy `_2`, `-2`, `(2)`, ` (2)`.
+* Zdjęcia są wyśrodkowane i skalowane do ramki; re‑kodowanie do JPG (domyślnie **90** i **450 DPI**).
+
+---
+
+## Styl tabeli i puste wartości
+
+* Pierwszy wiersz każdej tabeli ma tło `#A6A6A6` i **biały, pogrubiony** tekst.
+* Puste wartości zapisywane jako **`" - "`** (nie dotyczy pól `constant`).
 
 ---
 
 ## Rozwiązywanie problemów
 
-* **XLS nie wczytuje się** → potrzebny `xlrd>=2.0.1` (skrypt spróbuje doinstalować). W razie blokad: `pip install -U xlrd>=2.0.1`.
-* **Brak treści w DOCX** → upewnij się, że mapa nie jest pusta **albo** zaznaczono „Pozostałe kolumny”.
-* **Format daty** potrzebny inny niż `YYYY-MM-DD`? Dodajemy łatwo transformację `date_format`.
+* **.xls nie wczytuje się** – zainstaluj `xlrd>=2.0.1`.
+* **Kolejność `1,10,11,2…`** – włącz sortowanie w Opcjach (kolumna + kierunek); skrypt stosuje *human sort* dla tekstu.
+* **Zbyt duże pliki DOCX** – zmniejsz *Jakość JPG* lub *DPI eksportu*.
+* **Czcionka** nie jest stosowana – upewnij się, że font istnieje w systemie; w razie czego wybierz inną z listy.
+* **Diagnoza** – zajrzyj do pliku logu (tworzony obok pliku wynikowego).
 
 ---
+
+## Struktura repo (propozycja)
+
+```
+Excel2Word_with_presets/
+├─ excel_rows_to_word_gui.py
+├─ presets/
+│  ├─ naturvardesbiotop.json
+│  ├─ landskapsomrade.json
+│  ├─ vardeelement.json
+│  └─ sst.json
+├─ indata/
+│  └─ foto/               # tu można trzymać zdjęcia
+└─ output/
+```
+
+---
+
+## Pomysły (roadmap)
+
+* Wtyczki zewnętrznych transformacji (plug‑in pattern).
+* Eksport ustawień GUI jako preset (*.json*) jednym kliknięciem.
+* Predefiniowane style tabel (np. linie cienkie/grube, kolorystyka).
+* Eksport do PDF.
+
+---
+
+**Autorzy / wkład:** automatyzacja oszczędzająca godziny żmudnego copy‑paste – dzięki! 😉
