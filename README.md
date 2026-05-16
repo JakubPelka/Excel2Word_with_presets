@@ -1,168 +1,196 @@
-# Excel → Word: mikro‑tabele (GUI)
+# Excel → Word z presetami
 
-Konwerter, który **rozbija wiersze Excela** na **„mikro‑tabele” w Wordzie**. Obsługuje `.xlsx` i `.xls`, ma wygodne **GUI**, **presety JSON**, edytowalne **mapowanie pól**, transformacje, sortowanie „naturalne”, automatyczne **ramki na zdjęcia i mapę**, układy **A/B**, globalną **czcionkę i marginesy**, kompresję zdjęć oraz **log** z przebiegu.
+> **Status:** TEMP PUBLIC / RELEASE CANDIDATE v0.1.0  
+> Repozytorium celowo pozostaje po polsku.  
+> Repozytorium nie powinno zawierać danych wejściowych, wynikowych ani prywatnych plików roboczych.
 
-> Wersja *preset‑first*: najpierw wybierasz plik Excel, potem preset JSON.
+Narzędzie GUI do konwersji wierszy z pliku Excel na osobne mikro-tabele w dokumencie Word (`.docx`). Program korzysta z presetów JSON, które opisują mapowanie kolumn, etykiety, transformacje wartości oraz opcje generowania dokumentu.
 
----
+Projekt powstał przede wszystkim do szybkiego tworzenia uporządkowanych kart opisowych z tabel Excel, np. dla danych terenowych lub zestawień obiektów. Może jednak działać także z innymi plikami Excel, jeśli kolumny zostaną poprawnie zmapowane w presecie lub ręcznie w GUI.
 
-## Co nowego
+## Główne możliwości
 
-* **Układ B (POPRAWIONY)** – prawa kolumna:
+- wczytywanie plików `.xlsx` i `.xls`,
+- wybór presetu JSON po wskazaniu pliku Excel,
+- edytowalne mapowanie kolumn na pola w dokumencie Word,
+- transformacje wartości, np. formatowanie dat, przeliczanie powierzchni, wartości stałe, łączenie kilku kolumn,
+- naturalne sortowanie, np. `Obiekt 2` przed `Obiekt 10`,
+- generowanie mikro-tabel w pliku `.docx`,
+- opcjonalne ramki na zdjęcie i mapę,
+- dwa układy dokumentu: A i B,
+- konfiguracja czcionki, marginesów i szerokości kolumn,
+- log z przebiegu generowania dokumentu.
 
-  * wiersz 0 to **nagłówek** (szare tło `#A6A6A6`, biały bold);
-  * **poniżej** jedna scalona komórka na zdjęcie (**bez** tabeli w tabeli i bez dzielenia pola).
-* **Naturalne sortowanie** (human sort) – np. `Plats 2` < `Plats 10`.
-* **Transform `format`** – budowanie wartości z wielu kolumn wg szablonu (np. `"{xcoord}, {ycoord}"`).
-* **Automatyczne zdjęcia**: wskazujesz folder, kolumnę z ID (domyślnie `objektnummer`).
+## Struktura repozytorium
 
-  * Drugi kadr rozpoznawany po sufiksach: `_2`, `-2`, `(2)`, ` (2)`.
-  * **Układ A** może dzielić ramkę na **2 pola** (A: tak, B: nie – zgodnie z powyższą poprawką).
-  * Zdjęcia są **centrowane**, skalowane bez nadmiernego powiększania i **kompresowane**.
-* **Styl nagłówka** tabeli: tło `#A6A6A6`, biały, pogrubiony tekst.
-* **Globalna czcionka i marginesy** (domyślnie: Arial 9 pt; L=2.0, P=6.5, G=3.9, D=3.0 cm).
-* **Szerokości kolumn**:
+```text
+Excel2Word_with_presets/
+├─ README.md
+├─ LICENSE
+├─ CHANGELOG.md
+├─ requirements.txt
+├─ .gitignore
+├─ .gitattributes
+├─ script/
+│  └─ excel_rows_to_word_gui.py
+├─ presets/
+│  ├─ *.json
+│  └─ gdy_2_pola.txt
+├─ docs/
+│  └─ preset_format.md
+├─ tools/
+│  └─ build_release_zip.py
+└─ dist/
+   └─ README.md
+```
 
-  * Układ A: szerokość kolumny etykiet.
-  * Układ B: szer. etykiety, wartości i kolumny zdjęcia.
-* **Puste wartości** zapisywane jako `" - "` (nie dotyczy `constant`).
-* **Log** z pracy w katalogu wyjściowym (łatwe diagnozowanie problemów).
-
----
+Foldery z danymi wejściowymi, zdjęciami i wynikami powinny być lokalne i nie powinny być commitowane do repozytorium.
 
 ## Wymagania
 
-* Python 3.8+
-* Biblioteki: `pandas`, `python-docx`, `openpyxl`, `xlrd>=2.0.1` (dla `.xls`), `Pillow`.
-* Skrypt sam doinstaluje zależności (jeśli środowisko na to pozwala). W środowiskach zamkniętych zainstaluj ręcznie.
+- Python 3.8+
+- pakiety z pliku `requirements.txt`:
+  - `pandas`
+  - `python-docx`
+  - `openpyxl`
+  - `xlrd>=2.0.1`
+  - `Pillow`
 
----
+Instalacja zależności:
+
+```bash
+pip install -r requirements.txt
+```
+
+Jeśli skrypt ma własny mechanizm doinstalowywania zależności, można go traktować jako wygodne zabezpieczenie. Dla czystego i powtarzalnego uruchamiania zalecany jest jednak plik `requirements.txt`.
 
 ## Szybki start
 
-1. Uruchom: `python excel_rows_to_word_gui.py` (lub wersję *\_dev*).
-2. **Plik Excel** → kolumny wczytają się automatycznie.
-3. **Wczytaj preset…** (JSON) → pojawi się mapa pól.
-4. W zakładce **Mapowanie pól** dopracuj etykiety, kolejność, transformacje.
-5. W **Pozostałych kolumnach** zaznacz to, co chcesz dodać *ponad preset*.
-6. W **Opcjach** ustaw: zdjęcie/mapę, wysokości, **podział strony**, **sortowanie**, **układ A/B**, **czcionkę**, **marginesy**, **szerokości kolumn**, kompresję zdjęć.
-7. (Opcjonalnie) wskaż **folder zdjęć** i **kolumnę ID** do dopasowania.
-8. Kliknij **Generuj DOCX**.
+1. Przenieś działający plik programu do folderu:
 
----
+   ```text
+   script/excel_rows_to_word_gui.py
+   ```
+
+2. Uruchom program:
+
+   ```bash
+   python script/excel_rows_to_word_gui.py
+   ```
+
+3. Wskaż plik Excel.
+4. Wczytaj preset JSON z folderu `presets/`.
+5. Sprawdź mapowanie pól w GUI.
+6. Ustaw opcje dokumentu, zdjęć, mapy, sortowania, marginesów i czcionki.
+7. Kliknij generowanie dokumentu `.docx`.
 
 ## Presety JSON
 
-Struktura:
+Presety opisują, jak kolumny z Excela mają zostać przeniesione do dokumentu Word. Typowy preset zawiera:
 
 ```json
 {
-  "name": "Nazwa preset",
+  "name": "Nazwa presetu",
   "version": 1,
   "options": {
     "decimal_comma": true,
     "page_break": true,
     "photo": { "enabled": true, "height_cm": 6.0 },
-    "map":   { "enabled": true, "height_cm": 6.0 }
+    "map": { "enabled": true, "height_cm": 6.0 }
   },
-  "aliases": { "aliasKolumny": ["inne_nazwy"] },
+  "aliases": {
+    "nazwa_kolumny": ["inna_nazwa", "wariant_nazwy"]
+  },
   "mapping": [
-    { "enabled": true, "label": "Etykieta", "source": "kolumna", "transform": "identity", "const": "" },
-    { "enabled": true, "label": "Koordinater", "sources": ["xcoord","ycoord"], "transform": "format", "const": "{xcoord}, {ycoord}" }
+    {
+      "enabled": true,
+      "label": "Etykieta w Wordzie",
+      "source": "kolumna_excel",
+      "transform": "identity",
+      "const": ""
+    },
+    {
+      "enabled": true,
+      "label": "Koordynaty",
+      "sources": ["xcoord", "ycoord"],
+      "transform": "format",
+      "const": "{xcoord}, {ycoord}"
+    }
   ]
 }
 ```
 
-**Wyłączone** wiersze: `"enabled": false` (zostają w pliku, ale nie trafiają do Worda).
+Więcej informacji: [`docs/preset_format.md`](docs/preset_format.md).
 
-### Transformy wbudowane
+## Wbudowane transformacje
 
-* `identity` – bez zmian
-* `m2_to_ha_round2` – m² → ha (zaokrąglenie 0,01; lokalizacja kropka/przecinek)
-* `date_only` – tylko data `YYYY‑MM‑DD`
-* `prelim_to_bedomning` – 0/"nej"/false/puste → **Säker**, w przeciwnym razie **Preliminärt**
-* `constant` – stała wartość
-* `format` – składanie z wielu kolumn wg szablonu z `const`
+Najważniejsze transformacje używane przez presety:
 
----
+- `identity` – bez zmiany wartości,
+- `m2_to_ha_round2` – konwersja z m² na ha z zaokrągleniem,
+- `date_only` – wyciągnięcie samej daty,
+- `prelim_to_bedomning` – zamiana wartości technicznej na opis oceny,
+- `constant` – wartość stała,
+- `format` – złożenie wartości z kilku kolumn według szablonu.
 
-## GUI – przegląd
+## Zasady dla danych i wyników
 
-**Główne pola**
+Do repozytorium nie powinny trafiać:
 
-* Plik Excel, Folder wyjściowy, Nazwa pliku `.docx`
-* Folder zdjęć (opcjonalnie), **Kolumna dopasowania zdjęć** (np. `objektnummer`)
-* *Wczytaj preset…* – wybranie presetu JSON
+- pliki Excel z prawdziwymi danymi,
+- zdjęcia terenowe,
+- wygenerowane dokumenty Word,
+- logi,
+- foldery robocze,
+- archiwa ZIP z wynikami,
+- dane prywatne lub lokalizacyjne, jeśli nie są świadomie przeznaczone do publikacji.
 
-**Zakładki**
+Do pracy lokalnej można używać np. takich folderów:
 
-* **Mapowanie pól** – lista pozycji (każda → wiersz w Wordzie): włącz/wyłącz, etykieta, źródło, transform, stała; przyciski **↑/↓**, **Usuń**, **Dodaj z kolumny…**, **Dodaj wiersz** (stała). Pomoc pod listą ma zawijanie tekstu.
-* **Pozostałe kolumny** – pokaże tylko **nieużyte** kolumny po wczytaniu presetu.
-* **Opcje**:
-
-  * **Dokument**: ramka **zdjęcia** (wysokość,
-    *A: opcjonalny podział na 2 pola*; *B: zawsze jedna komórka*), ramka **mapy**, **podział strony**, przecinek dziesiętny.
-  * **Sortowanie**: wybór kolumny + kierunek (A→Z/Z→A). Dla tekstu używany jest **human sort**.
-  * **Układ**: **A** (tabela, potem zdjęcie i mapa) / **B** (tabela z prawą kolumną na zdjęcie; mapa pod spodem).
-  * **Czcionka**: rodzina i rozmiar (domyślnie Arial 9 pt).
-  * **Szerokości kolumn**:
-
-    * A: szerokość kolumny etykiet;
-    * B: szerokości etykiety, wartości, kolumny zdjęcia.
-  * **Zdjęcia – kompresja**: jakość JPG, DPI eksportu, „nie powiększaj małych zdjęć”.
-  * **Marginesy**: lewy/prawy/górny/dolny w cm.
-
----
-
-## Zasady zdjęć
-
-* Nazwa pliku == wartość z kolumny ID (np. `Lokal 2.jpg`). Dozwolone także warianty z `_` i numerem bez spacji.
-* Drugie zdjęcie (tylko **Układ A** przy *podziale ramki*): sufiksy `_2`, `-2`, `(2)`, ` (2)`.
-* Zdjęcia są wyśrodkowane i skalowane do ramki; re‑kodowanie do JPG (domyślnie **90** i **450 DPI**).
-
----
-
-## Styl tabeli i puste wartości
-
-* Pierwszy wiersz każdej tabeli ma tło `#A6A6A6` i **biały, pogrubiony** tekst.
-* Puste wartości zapisywane jako **`" - "`** (nie dotyczy pól `constant`).
-
----
-
-## Rozwiązywanie problemów
-
-* **.xls nie wczytuje się** – zainstaluj `xlrd>=2.0.1`.
-* **Kolejność `1,10,11,2…`** – włącz sortowanie w Opcjach (kolumna + kierunek); skrypt stosuje *human sort* dla tekstu.
-* **Zbyt duże pliki DOCX** – zmniejsz *Jakość JPG* lub *DPI eksportu*.
-* **Czcionka** nie jest stosowana – upewnij się, że font istnieje w systemie; w razie czego wybierz inną z listy.
-* **Diagnoza** – zajrzyj do pliku logu (tworzony obok pliku wynikowego).
-
----
-
-## Struktura repo (propozycja)
-
-```
-Excel2Word_with_presets/
-├─ excel_rows_to_word_gui.py
-├─ presets/
-│  ├─ naturvardesbiotop.json
-│  ├─ landskapsomrade.json
-│  ├─ vardeelement.json
-│  └─ sst.json
-├─ indata/
-│  └─ foto/               # tu można trzymać zdjęcia
-└─ output/
+```text
+indata/
+output/
+TEMP/
 ```
 
----
+Są one ignorowane przez `.gitignore`.
 
-## Pomysły (roadmap)
+## Release
 
-* Wtyczki zewnętrznych transformacji (plug‑in pattern).
-* Eksport ustawień GUI jako preset (*.json*) jednym kliknięciem.
-* Predefiniowane style tabel (np. linie cienkie/grube, kolorystyka).
-* Eksport do PDF.
+Repozytorium zawiera skrypt pomocniczy:
 
----
+```bash
+python tools/build_release_zip.py
+```
 
-**Autorzy / wkład:** automatyzacja oszczędzająca godziny żmudnego copy‑paste – dzięki! 😉
+Skrypt buduje paczkę ZIP w folderze `dist/`. Paczka release powinna zawierać tylko pliki potrzebne użytkownikowi, bez danych wejściowych i wynikowych.
+
+Zalecany tag release:
+
+```text
+v0.1.0
+```
+
+Zalecany tytuł release:
+
+```text
+Excel2Word z presetami v0.1.0
+```
+
+## Roadmap / możliwe dalsze prace
+
+- eksport ustawień GUI jako nowy preset JSON,
+- dodatkowe style tabel,
+- tryb PDF,
+- prostszy kreator presetów,
+- podział kodu na mniejsze moduły, jeśli projekt będzie dalej rozwijany.
+
+## Ograniczenia
+
+- Projekt jest narzędziem roboczym, nie pełną aplikacją produkcyjną.
+- Presety są przykładami konfiguracji i nie zawierają danych wejściowych ani wynikowych.
+- Repozytorium jest tymczasowo publiczne i może później zostać przeniesione do prywatnego trybu.
+
+## Licencja
+
+MIT. Szczegóły w pliku [`LICENSE`](LICENSE).
